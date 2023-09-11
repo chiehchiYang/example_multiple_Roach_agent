@@ -22,18 +22,88 @@ class RGB:
     GREEN = (0, 255, 0)
     YELLOW = (255, 255, 0)
     WHITE = (255, 255, 255)
-    UNLABELES = (0, 0, 0)
+
+    ROAD = (46, 52, 54)
+    ROUTE = (136, 138, 133)
+    ROAD_LINE = (255, 140, 255)
+    PEDESTRIANS_16 = (51, 255, 255)
+    PEDESTRIANS_11 = (102, 255, 255)
+    PEDESTRIANS_6 = (153, 255, 255)
+    PEDESTRIANS_1 = (204, 255, 255)
+    VEHICLES_16 = (51, 51, 255)
+    VEHICLES_11 = (102, 102, 255)
+    VEHICLES_6 = (153, 153, 255)
+    VEHICLES_1 = (204, 204, 255)
+
+    R_LIGHT_STOP_16 = (255, 51, 51)
+    R_LIGHT_STOP_11 = (255, 102, 102)
+    R_LIGHT_STOP_6 = (255, 153, 153)
+    R_LIGHT_STOP_1 = (255, 204, 204)
+
+    Y_LIGHT_STOP_16 = (255, 255, 51)
+    Y_LIGHT_STOP_11 = (255, 255, 102)
+    Y_LIGHT_STOP_6 = (255, 255, 153)
+    Y_LIGHT_STOP_1 = (255, 255, 204)
+
+    G_LIGHT_STOP_16 = (51, 255, 51)
+    G_LIGHT_STOP_11 = (102, 255, 102)
+    G_LIGHT_STOP_6 = (153, 255, 153)
+    G_LIGHT_STOP_1 = (204, 255, 204)
+
+    # 
+    # UNLABELES = (0, 0, 0)
+
+# Drivable areas
+# Desired route
+# Lane boundaries
+# Vehicles t-16
+# Vehicles t-11
+# Vehicles t-6
+# Vehicles t-1
+# Pedestrians t-16
+# Pedestrians t-11
+# Pedestrians t-6
+# Pedestrians t-1
+# Lights and stops t-16
+# Lights and stops t-11
+# Lights and stops t-6
+# Lights and stops t-1
+
+#if the frame of t-16, t-11 or t-6 does not exist, replace it with the oldest frame
+
 
 # 9 channel 
 RGB_BY_MASK = {
 
     BirdViewMasks.AGENT: RGB.CHAMELEON,
-    BirdViewMasks.OBSTACLES: RGB.DARK_GRAY,    
-    BirdViewMasks.PEDESTRIANS: RGB.CHOCOLATE,
-    BirdViewMasks.VEHICLES: RGB.ORANGE,
-    BirdViewMasks.ROAD_LINE: RGB.WHITE,
-    BirdViewMasks.ROAD: RGB.DIM_GRAY,
-    BirdViewMasks.UNLABELES: RGB.UNLABELES,
+
+    BirdViewMasks.Y_LIGHT_STOP_1: RGB.Y_LIGHT_STOP_1,    
+    BirdViewMasks.Y_LIGHT_STOP_6: RGB.Y_LIGHT_STOP_6,    
+    BirdViewMasks.Y_LIGHT_STOP_11: RGB.Y_LIGHT_STOP_11,    
+    BirdViewMasks.Y_LIGHT_STOP_16: RGB.Y_LIGHT_STOP_16,   
+
+    BirdViewMasks.G_LIGHT_STOP_1: RGB.G_LIGHT_STOP_1,    
+    BirdViewMasks.G_LIGHT_STOP_6: RGB.G_LIGHT_STOP_6,    
+    BirdViewMasks.G_LIGHT_STOP_11: RGB.G_LIGHT_STOP_11,    
+    BirdViewMasks.G_LIGHT_STOP_16: RGB.G_LIGHT_STOP_16,   
+
+    BirdViewMasks.R_LIGHT_STOP_1: RGB.R_LIGHT_STOP_1,    
+    BirdViewMasks.R_LIGHT_STOP_6: RGB.R_LIGHT_STOP_6,    
+    BirdViewMasks.R_LIGHT_STOP_11: RGB.R_LIGHT_STOP_11,    
+    BirdViewMasks.R_LIGHT_STOP_16: RGB.R_LIGHT_STOP_16,    
+
+    BirdViewMasks.PEDESTRIANS_1: RGB.PEDESTRIANS_1,
+    BirdViewMasks.PEDESTRIANS_6: RGB.PEDESTRIANS_6,
+    BirdViewMasks.PEDESTRIANS_11: RGB.PEDESTRIANS_11,
+    BirdViewMasks.PEDESTRIANS_16: RGB.PEDESTRIANS_16,
+    BirdViewMasks.VEHICLES_1: RGB.VEHICLES_1,
+    BirdViewMasks.VEHICLES_6: RGB.VEHICLES_6,
+    BirdViewMasks.VEHICLES_11: RGB.VEHICLES_11,
+    BirdViewMasks.VEHICLES_16: RGB.VEHICLES_16,
+    BirdViewMasks.ROAD_LINE: RGB.ROAD_LINE,
+    BirdViewMasks.ROUTE: RGB.ROUTE,
+    BirdViewMasks.ROAD: RGB.ROAD,
+    # BirdViewMasks.UNLABELES: RGB.UNLABELES,
     
 }
 
@@ -112,7 +182,7 @@ class BirdViewProducer:
         
     # draw 
     def produce(
-        self, vehicle_loc, yaw, agent_bbox_list, vehicle_bbox_list, pedestrians_bbox_list, obstacle_bbox_list, 
+        self, vehicle_loc, yaw, agent_bbox_list, vehicle_bbox_1_16, pedestrain_bbox_1_16, r_bbox_1_16, g_bbox_1_16, y_bbox_1_16, obstacle_bbox_list, 
     ) -> BirdView:
         
         # Reusing already generated static masks for whole map
@@ -153,8 +223,9 @@ class BirdViewProducer:
         
         # draw actor 
         masks = self._render_actors_masks(agent_bbox_list, 
-                                          vehicle_bbox_list, 
-                                          pedestrians_bbox_list, 
+                                          vehicle_bbox_1_16, 
+                                          pedestrain_bbox_1_16,
+                                          r_bbox_1_16, g_bbox_1_16, y_bbox_1_16, 
                                           obstacle_bbox_list, 
                                           masks)
         
@@ -179,8 +250,9 @@ class BirdViewProducer:
     def _render_actors_masks(
         self,
         agent_bbox_list,
-        vehicle_bbox_list,
-        pedestrians_bbox_list,
+        vehicle_bbox_1_16,
+        pedestrain_bbox_1_16,
+        r_bbox_1_16, g_bbox_1_16, y_bbox_1_16,
         obstacle_bbox_list,
         masks: np.ndarray,
     ) -> np.ndarray:
@@ -196,18 +268,153 @@ class BirdViewProducer:
         # masks[BirdViewMasks.YELLOW_LIGHTS.value] = yellow_lights_mask
         # masks[BirdViewMasks.GREEN_LIGHTS.value] = green_lights_mask
         
+
+        
         masks[BirdViewMasks.AGENT.value] = self.masks_generator.draw_bbox_mask(
             agent_bbox_list
         )
-        masks[BirdViewMasks.VEHICLES.value] = self.masks_generator.draw_bbox_mask(
+
+        if len(vehicle_bbox_1_16) < 16:
+            vehicle_bbox_list = vehicle_bbox_1_16[0]
+        else:
+            vehicle_bbox_list = vehicle_bbox_1_16[-16]
+        masks[BirdViewMasks.VEHICLES_16.value] = self.masks_generator.draw_bbox_mask(
             vehicle_bbox_list
         )
-        masks[BirdViewMasks.PEDESTRIANS.value] = self.masks_generator.draw_bbox_mask(
+        if len(vehicle_bbox_1_16) < 11:
+            vehicle_bbox_list = vehicle_bbox_1_16[0]
+        else:
+            vehicle_bbox_list = vehicle_bbox_1_16[-11]
+        masks[BirdViewMasks.VEHICLES_11.value] = self.masks_generator.draw_bbox_mask(
+            vehicle_bbox_list
+        )
+        if len(vehicle_bbox_1_16) < 6:
+            vehicle_bbox_list = vehicle_bbox_1_16[0]
+        else:
+            vehicle_bbox_list = vehicle_bbox_1_16[-6]
+        masks[BirdViewMasks.VEHICLES_6.value] = self.masks_generator.draw_bbox_mask(
+            vehicle_bbox_list
+        )
+        vehicle_bbox_list = vehicle_bbox_1_16[-1]
+        masks[BirdViewMasks.VEHICLES_1.value] = self.masks_generator.draw_bbox_mask(
+            vehicle_bbox_list
+        )
+
+
+        # ped 
+        if len(pedestrain_bbox_1_16) < 16:
+            pedestrians_bbox_list = pedestrain_bbox_1_16[0]
+        else:
+            pedestrians_bbox_list = pedestrain_bbox_1_16[-16]
+        masks[BirdViewMasks.PEDESTRIANS_16.value] = self.masks_generator.draw_bbox_mask(
             pedestrians_bbox_list
         )
-        masks[BirdViewMasks.OBSTACLES.value] = self.masks_generator.draw_bbox_mask(
-            obstacle_bbox_list
+        if len(pedestrain_bbox_1_16) < 11:
+            pedestrians_bbox_list = pedestrain_bbox_1_16[0]
+        else:
+            pedestrians_bbox_list = pedestrain_bbox_1_16[-11]
+        masks[BirdViewMasks.PEDESTRIANS_11.value] = self.masks_generator.draw_bbox_mask(
+            pedestrians_bbox_list
         )
+        if len(pedestrain_bbox_1_16) < 6:
+            pedestrians_bbox_list = pedestrain_bbox_1_16[0]
+        else:
+            pedestrians_bbox_list = pedestrain_bbox_1_16[-6]
+        masks[BirdViewMasks.PEDESTRIANS_6.value] = self.masks_generator.draw_bbox_mask(
+            pedestrians_bbox_list
+        )
+        pedestrians_bbox_list = pedestrain_bbox_1_16[-1]
+        masks[BirdViewMasks.PEDESTRIANS_1.value] = self.masks_generator.draw_bbox_mask(
+            pedestrians_bbox_list
+        )
+
+        # ToDos: Add stop sign 
+
+        # r_bbox_1_16, g_bbox_1_16, y_bbox_1_16,
+        # ped 
+        if len(r_bbox_1_16) < 16:
+            r_bbox = r_bbox_1_16[0]
+        else:
+            r_bbox = r_bbox_1_16[-16]
+        masks[BirdViewMasks.R_LIGHT_STOP_16.value] = self.masks_generator.draw_line_mask(
+            r_bbox
+        )
+        if len(r_bbox_1_16) < 11:
+            r_bbox = r_bbox_1_16[0]
+        else:
+            r_bbox = r_bbox_1_16[-11]
+        masks[BirdViewMasks.R_LIGHT_STOP_11.value] = self.masks_generator.draw_line_mask(
+            r_bbox
+        )
+        if len(r_bbox_1_16) < 6:
+            r_bbox = r_bbox_1_16[0]
+        else:
+            r_bbox = r_bbox_1_16[-6]
+        masks[BirdViewMasks.R_LIGHT_STOP_6.value] = self.masks_generator.draw_line_mask(
+            r_bbox
+        )
+        r_bbox = r_bbox_1_16[-1]
+        masks[BirdViewMasks.R_LIGHT_STOP_1.value] = self.masks_generator.draw_line_mask(
+            r_bbox
+        )
+
+        if len(g_bbox_1_16) < 16:
+            g_bbox = g_bbox_1_16[0]
+        else:
+            g_bbox = g_bbox_1_16[-16]
+        masks[BirdViewMasks.G_LIGHT_STOP_16.value] = self.masks_generator.draw_line_mask(
+            g_bbox
+        )
+        if len(g_bbox_1_16) < 11:
+            g_bbox = g_bbox_1_16[0]
+        else:
+            g_bbox = g_bbox_1_16[-11]
+        masks[BirdViewMasks.G_LIGHT_STOP_11.value] = self.masks_generator.draw_line_mask(
+            g_bbox
+        )
+        if len(g_bbox_1_16) < 6:
+            g_bbox = g_bbox_1_16[0]
+        else:
+            g_bbox = g_bbox_1_16[-6]
+        masks[BirdViewMasks.G_LIGHT_STOP_6.value] = self.masks_generator.draw_line_mask(
+            g_bbox
+        )
+        g_bbox = g_bbox_1_16[-1]
+        masks[BirdViewMasks.G_LIGHT_STOP_1.value] = self.masks_generator.draw_line_mask(
+            g_bbox
+        )
+
+        if len(y_bbox_1_16) < 16:
+            y_bbox = y_bbox_1_16[0]
+        else:
+            y_bbox = y_bbox_1_16[-16]
+        masks[BirdViewMasks.Y_LIGHT_STOP_16.value] = self.masks_generator.draw_line_mask(
+            y_bbox
+        )
+        if len(y_bbox_1_16) < 11:
+            y_bbox = y_bbox_1_16[0]
+        else:
+            y_bbox = y_bbox_1_16[-11]
+        masks[BirdViewMasks.Y_LIGHT_STOP_11.value] = self.masks_generator.draw_line_mask(
+            y_bbox
+        )
+        if len(y_bbox_1_16) < 6:
+            y_bbox = y_bbox_1_16[0]
+        else:
+            y_bbox = y_bbox_1_16[-6]
+        masks[BirdViewMasks.Y_LIGHT_STOP_6.value] = self.masks_generator.draw_line_mask(
+            y_bbox
+        )
+        y_bbox = y_bbox_1_16[-1]
+        masks[BirdViewMasks.Y_LIGHT_STOP_1.value] = self.masks_generator.draw_line_mask(
+            y_bbox
+        )
+        # masks[BirdViewMasks.PEDESTRIANS.value] = self.masks_generator.draw_bbox_mask(
+        #     pedestrians_bbox_list
+        # )
+        # masks[BirdViewMasks.OBSTACLES.value] = self.masks_generator.draw_bbox_mask(
+        #     obstacle_bbox_list
+        # )
         
         
         return masks
@@ -226,6 +433,45 @@ class BirdViewProducer:
             rgb_canvas[nonzero_indices(mask)] = rgb_color
         return rgb_canvas
     
+
+    @staticmethod
+    def as_roach_input(birdview: BirdView):
+        h, w = 192, 192
+
+        road_mask = birdview[BirdViewMasks.ROAD][0:192, 56:248] * 255
+        route_mask = birdview[BirdViewMasks.ROUTE][0:192, 56:248] * 255
+        road_line_mask = birdview[BirdViewMasks.ROAD_LINE][0:192, 56:248] * 255
+
+        vehicle_history = []
+        # crop for roach input 
+        # target -> 192 x 192 
+        # 304 --> [56, 248]
+        #y [0, 192]
+
+        print(birdview[BirdViewMasks.VEHICLES_16][0:192, 56:248].shape)
+
+
+        for i in range(4):
+            vehicle_history.append(birdview[BirdViewMasks.VEHICLES_16+i][0:192, 56:248] * 255)
+
+        walker_history = []
+        for i in range(4):
+            walker_history.append(birdview[BirdViewMasks.PEDESTRIANS_16+i][0:192, 56:248] * 255)
+
+        trafficlight_stop_history = []
+        for i in range(4):
+            single_time_frame = np.zeros([h, w], dtype=np.uint8)
+            single_time_frame[birdview[BirdViewMasks.G_LIGHT_STOP_16+i][0:192, 56:248]] = 80
+            single_time_frame[birdview[BirdViewMasks.Y_LIGHT_STOP_16+i][0:192, 56:248]] = 170
+            single_time_frame[birdview[BirdViewMasks.R_LIGHT_STOP_16+i][0:192, 56:248]] = 255
+            trafficlight_stop_history.append(single_time_frame)
+
+        observation = np.stack((road_mask, route_mask, road_line_mask, *vehicle_history, *walker_history, *trafficlight_stop_history), axis=2)
+        observation = np.transpose(observation, [2, 0, 1])
+        # print(observation)
+        return observation
+
+
     
     @staticmethod
     def as_ss(birdview: BirdView):

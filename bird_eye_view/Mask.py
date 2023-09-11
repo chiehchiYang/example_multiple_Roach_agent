@@ -167,7 +167,31 @@ class MapMaskGenerator:
         for corners in bbox_list:
             corners = [self.location_to_pixel(loc) for loc in corners]
             cv2.fillPoly(img=canvas, pts=np.int32([corners]), color=COLOR_ON)
-        return canvas    
+        return canvas   
+
+    def draw_line_mask(self, bbox_list) -> Mask:
+        canvas = self.make_empty_mask()
+        # Carla corrin to pixel 
+        
+        for corners in bbox_list:
+            corners = [self.location_to_pixel(loc) for loc in corners]
+            # cv2.fillPoly(img=canvas, pts=np.int32([corners]), color=COLOR_ON)
+
+
+            points = (np.int32([corners]))
+            
+
+            # [[[184 333]
+            # [184 315]
+            # [184 319]
+            # [184 301]]]
+
+
+            # print(corners)
+            # [Coord(x=55, y=-21), Coord(x=55, y=-39), Coord(x=55, y=-35), Coord(x=55, y=-53)]
+            cv2.line(canvas, tuple( points[0][0] ), tuple( points[0][3] ), color=1, thickness=6)
+
+        return canvas   
         
         
     def crosswalk_mask(self) -> Mask:
@@ -290,17 +314,55 @@ class BirdViewMasks(IntEnum):
     
 
 
+    # Drivable areas
+    # Desired route
+    # Lane boundaries
+    # Vehicles t-16
+    # Vehicles t-11
+    # Vehicles t-6
+    # Vehicles t-1
+    # Pedestrians t-16
+    # Pedestrians t-11
+    # Pedestrians t-6
+    # Pedestrians t-1
+    # Lights and stops t-16
+    # Lights and stops t-11
+    # Lights and stops t-6
+    # Lights and stops t-1
+
+
     # RED_LIGHTS = 7
     # YELLOW_LIGHTS = 6
     # GREEN_LIGHTS = 5
-    AGENT = 6
-    OBSTACLES = 5
-    PEDESTRIANS = 4
-    VEHICLES = 3
-    # crosswalk
+
+    AGENT = 23
+    Y_LIGHT_STOP_1 = 22
+    Y_LIGHT_STOP_6 = 21
+    Y_LIGHT_STOP_11 = 20
+    Y_LIGHT_STOP_16 = 19
+    
+    G_LIGHT_STOP_1 = 18
+    G_LIGHT_STOP_6 = 17
+    G_LIGHT_STOP_11 = 16
+    G_LIGHT_STOP_16 = 15    
+    
+    R_LIGHT_STOP_1 = 14
+    R_LIGHT_STOP_6 = 13
+    R_LIGHT_STOP_11 = 12
+    R_LIGHT_STOP_16 = 11
+
+    PEDESTRIANS_1 = 10
+    PEDESTRIANS_6 = 9
+    PEDESTRIANS_11 = 8
+    PEDESTRIANS_16 = 7
+    VEHICLES_1 = 6
+    VEHICLES_6 = 5
+    VEHICLES_11 = 4
+    VEHICLES_16 = 3
     ROAD_LINE = 2
-    ROAD = 1
-    UNLABELES = 0
+    ROUTE = 1
+    ROAD = 0
+    #UNLABELES = 0
 
     @staticmethod
     def top_to_bottom() -> List[int]:

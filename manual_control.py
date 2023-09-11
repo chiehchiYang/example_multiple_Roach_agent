@@ -78,12 +78,14 @@ except IndexError:
 # -- imports -------------------------------------------------------------------
 # ==============================================================================
 
-
+from collections import deque
 
 from bird_eye_view.BirdViewProducer import BirdViewProducer, BirdView
 from bird_eye_view.Mask import PixelDimensions, Loc
 
 ################
+
+
 
 import carla
 
@@ -105,7 +107,20 @@ import cv2
 import datetime
 
 from agents.navigation.behavior_agent import BehaviorAgent  # pylint: disable=import-error
+from carla_gym.core.obs_manager.obs_manager_handler import ObsManagerHandler
+from carla_gym.core.task_actor.ego_vehicle.ego_vehicle_handler import EgoVehicleHandler
+from carla_gym.utils import config_utils
+from carla_gym.utils.traffic_light import TrafficLightHandler
 
+import gym
+from omegaconf import DictConfig, OmegaConf
+from importlib import import_module
+import wandb
+def load_entry_point(name):
+    mod_name, attr_name = name.split(":") #agents.rl_birdview.rl_birdview_agent:RlBirdviewAgent
+    mod = import_module(mod_name)
+    fn = getattr(mod, attr_name)
+    return fn
 try:
     import pygame
     from pygame.locals import KMOD_CTRL
@@ -1301,7 +1316,77 @@ def get_actor_blueprints(world, filter, generation):
         print("   Warning! Actor Generation is not valid. No actor will be spawned.")
         return []
     
-    
+def _get_traffic_light_waypoints(traffic_light, carla_map):
+    """
+    get area of a given traffic light
+    adapted from "carla-simulator/scenario_runner/srunner/scenariomanager/scenarioatomics/atomic_criteria.py"
+    """
+    base_transform = traffic_light.get_transform()
+    tv_loc = traffic_light.trigger_volume.location
+    tv_ext = traffic_light.trigger_volume.extent
+
+    # Discretize the trigger box into points
+    x_values = np.arange(-0.9 * tv_ext.x, 0.9 * tv_ext.x, 1.0)  # 0.9 to avoid crossing to adjacent lanes
+    area = []
+    for x in x_values:
+        point_location = base_transform.transform(tv_loc + carla.Location(x=x))
+        area.append(point_location)
+
+    # Get the waypoints of these points, removing duplicates
+    ini_wps = []
+    for pt in area:
+        wpx = carla_map.get_waypoint(pt)
+        # As x_values are arranged in order, only the last one has to be checked
+        if not ini_wps or ini_wps[-1].road_id != wpx.road_id or ini_wps[-1].lane_id != wpx.lane_id:
+            ini_wps.append(wpx)
+
+    # Leaderboard: Advance them until the intersection
+    stopline_wps = []
+    stopline_vertices = []
+    junction_wps = []
+    for wpx in ini_wps:
+        # Below: just use trigger volume, otherwise it's on the zebra lines.
+        # stopline_wps.append(wpx)
+        # vec_forward = wpx.transform.get_forward_vector()
+        # vec_right = carla.Vector3D(x=-vec_forward.y, y=vec_forward.x, z=0)
+
+        # loc_left = wpx.transform.location - 0.4 * wpx.lane_width * vec_right
+        # loc_right = wpx.transform.location + 0.4 * wpx.lane_width * vec_right
+        # stopline_vertices.append([loc_left, loc_right])
+
+        while not wpx.is_intersection:
+            next_wp = wpx.next(0.5)[0]
+            if next_wp and not next_wp.is_intersection:
+                wpx = next_wp
+            else:
+                break
+        junction_wps.append(wpx)
+
+        stopline_wps.append(wpx)
+        vec_forward = wpx.transform.get_forward_vector()
+        vec_right = carla.Vector3D(x=-vec_forward.y, y=vec_forward.x, z=0)
+
+        loc_left = wpx.transform.location - 0.4 * wpx.lane_width * vec_right
+        loc_right = wpx.transform.location + 0.4 * wpx.lane_width * vec_right
+        stopline_vertices.append([loc_left, loc_right])
+
+    # all paths at junction for this traffic light
+    junction_paths = []
+    path_wps = []
+    wp_queue = deque(junction_wps)
+    while len(wp_queue) > 0:
+        current_wp = wp_queue.pop()
+        path_wps.append(current_wp)
+        next_wps = current_wp.next(1.0)
+        for next_wp in next_wps:
+            if next_wp.is_junction:
+                wp_queue.append(next_wp)
+            else:
+                junction_paths.append(path_wps)
+                path_wps = []
+
+    return carla.Location(base_transform.transform(tv_loc)), stopline_wps, stopline_vertices, junction_paths
+
     
 
 class BEV_MAP():
@@ -1313,13 +1398,56 @@ class BEV_MAP():
         self.data = None
         self.birdview_producer = BirdViewProducer(
                 args.town, 
-                PixelDimensions(width=512, height=512), 
+                # PixelDimensions(width=512, height=512), 
+                PixelDimensions(width=304, height=304), 
                 pixels_per_meter=5)
         
         
        
         # init Roach-model 
         self.model = None # load roach model 
+
+        self.vehicle_bbox_1_16 = []
+        self.pedestrain_bbox_1_16 = []
+
+        self.Y_bbox_1_16 = []
+        self.G_bbox_1_16 = []
+        self.R_bbox_1_16 = []
+
+        # inti roach model 
+        #load config
+        cfg = OmegaConf.load('config_agent.yaml')
+        cfg = OmegaConf.to_container(cfg)
+        print(cfg['wb_run_path'])
+
+        # download model checkpoint 
+        if cfg['wb_run_path'] is not None:
+            api = wandb.Api()
+            run = api.run(cfg['wb_run_path'])
+            all_ckpts = [f for f in run.files() if 'ckpt' in f.name] #load a check points
+        if cfg['wb_ckpt_step'] is None: # choose the checkpoint with the largest trained steps
+            f = max(all_ckpts, key=lambda x: int(x.name.split('_')[1].split('.')[0]))
+            print(f'Resume checkpoint latest {f.name}')
+        f.download(replace=True)
+        ckpt = f.name
+        obs_configs = cfg['obs_configs']
+        train_cfg = cfg['training'] 
+
+        # prepare policy
+        policy_class = load_entry_point(cfg['policy']['entry_point'])
+        policy_kwargs = cfg['policy']['kwargs']
+        print(f'Loading wandb checkpoint: {ckpt}')
+        policy, train_cfg['kwargs'] = policy_class.load(ckpt)
+        policy = policy.eval()
+
+        self._wrapper_class = load_entry_point(cfg['env_wrapper']['entry_point'])
+        self._wrapper_kwargs = cfg['env_wrapper']['kwargs']
+
+
+
+
+
+        self.policy = policy
 
     def collect_actor_data(self, world):
         vehicles_id_list = []
@@ -1376,8 +1504,8 @@ class BEV_MAP():
             distance = ego_loc.distance(actor_loc)
 
 
-            if distance < 50:
-                vehicles_id_list.append(_id)
+            # if distance < 50:
+            vehicles_id_list.append(_id)
 
             acceleration = get_xyz(actor.get_acceleration())
             velocity = get_xyz(actor.get_velocity())
@@ -1398,12 +1526,15 @@ class BEV_MAP():
                 "gear": vehicle_control.gear
             }
 
+
             data[_id] = {}
             data[_id]["location"] = location
             data[_id]["rotation"] = rotation
             data[_id]["distance"] = distance
             data[_id]["acceleration"] = acceleration
             data[_id]["velocity"] = velocity
+            data[_id]["vel_x"] = v.x
+            data[_id]["vel_y"] = v.y
             data[_id]["speed"] = speed
             data[_id]["angular_velocity"] = angular_velocity
             data[_id]["control"] = control
@@ -1432,8 +1563,8 @@ class BEV_MAP():
 
             distance = ego_loc.distance(actor_loc)
 
-            if distance < 50:
-                pedestrian_id_list.append(_id)
+            # if distance < 50:
+            pedestrian_id_list.append(_id)
 
             acceleration = get_xyz(actor.get_acceleration())
             velocity = get_xyz(actor.get_velocity())
@@ -1455,42 +1586,31 @@ class BEV_MAP():
             data[_id]["cord_bounding_box"] = cord_bounding_box
             data[_id]["type"] = 'pedestrian'
 
-        # traffic_id_list = []
-        # lights = world.world.get_actors().filter("*traffic_light*")
-        # for actor in lights:
 
-        #     _id = actor.id
+        
+        
+        traffic_id_list = []
+        lights = world.world.get_actors().filter("*traffic_light*")
+        for actor in lights:
+            tv_loc, stopline_wps, stopline_vtx, junction_paths = _get_traffic_light_waypoints( actor, world.world.get_map())
+            # tv_loc
+            # stopline_vtx
 
-        #     traffic_light_state = int(actor.state)  # traffic light state
-        #     actor_loc = actor.get_location()
-        #     distance = ego_loc.distance(actor_loc)
+            _id = actor.id
+            traffic_id_list.append(_id)
+            traffic_light_state = int(actor.state)  # traffic light state
+            cord_bounding_box = {}
+            cord_bounding_box["cord_0"] = [stopline_vtx[0][0].x, stopline_vtx[0][0].y, stopline_vtx[0][0].z]
+            cord_bounding_box["cord_1"] = [stopline_vtx[1][0].x, stopline_vtx[1][0].y, stopline_vtx[1][0].z]
+            cord_bounding_box["cord_2"] = [stopline_vtx[0][1].x, stopline_vtx[0][1].y, stopline_vtx[0][1].z]
+            cord_bounding_box["cord_3"] = [stopline_vtx[1][1].x, stopline_vtx[1][1].y, stopline_vtx[1][1].z]
 
-        #     #if distance < 50:
-        #     traffic_id_list.append(_id)
+            data[_id] = {}
+            data[_id]["state"] = traffic_light_state
+            data[_id]["cord_bounding_box"] = cord_bounding_box
 
-        #     data[_id] = {}
-        #     data[_id]["state"] = traffic_light_state
-        #     actor_loc = actor.get_location()
-        #     location = get_xyz(actor_loc)
-        #     data[_id]["location"] = location
-        #     data[_id]["distance"] = distance
-        #     data[_id]["type"] = "traffic_light"
 
-        #     trigger = actor.trigger_volume
-        #     # bbox = actor.bounding_box
-        #     verts = [v for v in trigger.get_world_vertices(carla.Transform())]
-
-        #     counter = 0
-        #     for loc in verts:
-        #         cord_bounding_box["cord_"+str(counter)] = [loc.x, loc.y, loc.z]
-        #         counter += 1
-        #     data[_id]["tigger_cord_bounding_box"] = cord_bounding_box
-        #     box = trigger.extent
-        #     loc = trigger.location
-        #     ori = trigger.rotation.get_forward_vector()
-        #     data[_id]["trigger_loc"] = [loc.x, loc.y, loc.z]
-        #     data[_id]["trigger_ori"] = [ori.x, ori.y, ori.z]
-        #     data[_id]["trigger_box"] = [box.x, box.y]
+        
 
         obstacle_id_list = []
 
@@ -1506,8 +1626,8 @@ class BEV_MAP():
                 cord_bounding_box["cord_"+str(counter)] = [loc.x, loc.y, loc.z]
                 counter += 1
 
-            if distance < 50:
-                obstacle_id_list.append(_id)
+            # if distance < 50:
+            obstacle_id_list.append(_id)
 
             data[_id] = {}
             data[_id]["distance"] = distance
@@ -1515,7 +1635,7 @@ class BEV_MAP():
             data[_id]["cord_bounding_box"] = cord_bounding_box
 
 
-        # data["traffic_light_ids"] = traffic_id_list
+        data["traffic_light_ids"] = traffic_id_list
 
         data["obstacle_ids"] = obstacle_id_list
         data["vehicles_ids"] = vehicles_id_list
@@ -1530,10 +1650,15 @@ class BEV_MAP():
         ego_pos = Loc(x=actor_dict[ego_id]["location"]["x"], y=actor_dict[ego_id]["location"]["y"])
         ego_yaw = actor_dict[ego_id]["rotation"]["yaw"]
 
+
         obstacle_bbox_list = []
         pedestrian_bbox_list = []
         vehicle_bbox_list = []
         agent_bbox_list = []
+
+        r_traffic_light_list = []
+        g_traffic_light_list = []
+        y_traffic_light_list = []
 
         # interactive id 
         vehicle_id_list = list(actor_dict["vehicles_ids"])
@@ -1541,6 +1666,47 @@ class BEV_MAP():
         pedestrian_id_list = list(actor_dict["pedestrian_ids"])
         # obstacle id list 
         obstacle_id_list = list(actor_dict["obstacle_ids"])
+
+        # traffic light id list 
+
+        traffic_light_id_list = list(actor_dict["traffic_light_ids"])
+
+        for id in traffic_light_id_list:
+            pos_0 = actor_dict[id]["cord_bounding_box"]["cord_0"]
+            pos_1 = actor_dict[id]["cord_bounding_box"]["cord_1"]
+            pos_2 = actor_dict[id]["cord_bounding_box"]["cord_2"]
+            pos_3 = actor_dict[id]["cord_bounding_box"]["cord_3"]
+            # obstacle_bbox_list.append([Loc(x=pos_0[0], y=pos_0[1]), 
+            #                             Loc(x=pos_1[0], y=pos_1[1]), 
+            #                             Loc(x=pos_2[0], y=pos_2[1]), 
+            #                             Loc(x=pos_3[0], y=pos_3[1]), 
+            #                             ])
+            # print(
+            # # 0 - R
+            # # 1 - Y
+            # # 2 - G
+            
+            if actor_dict[id]["state"] == 0 :
+                r_traffic_light_list.append([Loc(x=pos_0[0], y=pos_0[1]), 
+                                        Loc(x=pos_1[0], y=pos_1[1]), 
+                                        Loc(x=pos_2[0], y=pos_2[1]), 
+                                        Loc(x=pos_3[0], y=pos_3[1]), 
+                                        ])
+            elif actor_dict[id]["state"] == 1:
+                g_traffic_light_list.append([Loc(x=pos_0[0], y=pos_0[1]), 
+                                        Loc(x=pos_1[0], y=pos_1[1]), 
+                                        Loc(x=pos_2[0], y=pos_2[1]), 
+                                        Loc(x=pos_3[0], y=pos_3[1]), 
+                                        ])  
+            elif actor_dict[id]["state"] == 2:
+                y_traffic_light_list.append([Loc(x=pos_0[0], y=pos_0[1]), 
+                                        Loc(x=pos_1[0], y=pos_1[1]), 
+                                        Loc(x=pos_2[0], y=pos_2[1]), 
+                                        Loc(x=pos_3[0], y=pos_3[1]), 
+                                        ])  
+            
+
+
 
         for id in obstacle_id_list:
             pos_0 = actor_dict[id]["cord_bounding_box"]["cord_0"]
@@ -1584,19 +1750,109 @@ class BEV_MAP():
                                         Loc(x=pos_2[0], y=pos_2[1]), 
                                         Loc(x=pos_3[0], y=pos_3[1]), 
                                         ])
+            
 
-        birdview: BirdView = self.birdview_producer.produce(ego_pos, yaw=ego_yaw,
-                                                       agent_bbox_list=agent_bbox_list, 
-                                                       vehicle_bbox_list=vehicle_bbox_list,
-                                                       pedestrians_bbox_list=pedestrian_bbox_list,
-                                                       obstacle_bbox_list=obstacle_bbox_list)
+
+        if len(self.pedestrain_bbox_1_16) < 16:
+            self.pedestrain_bbox_1_16.append(pedestrian_bbox_list)
+        else:
+            self.pedestrain_bbox_1_16.pop(0)
+            self.pedestrain_bbox_1_16.append(pedestrian_bbox_list)
+
+        if len(self.vehicle_bbox_1_16) < 16:
+            self.vehicle_bbox_1_16.append(vehicle_bbox_list)
+        else:
+            self.vehicle_bbox_1_16.pop(0)
+            self.vehicle_bbox_1_16.append(vehicle_bbox_list)
+
+
+        if len(self.Y_bbox_1_16) < 16:
+            self.Y_bbox_1_16.append(y_traffic_light_list)
+        else:
+            self.Y_bbox_1_16.pop(0)
+            self.Y_bbox_1_16.append(y_traffic_light_list)
+
+
+        if len(self.G_bbox_1_16) < 16:
+            self.G_bbox_1_16.append(g_traffic_light_list)
+        else:
+            self.G_bbox_1_16.pop(0)
+            self.G_bbox_1_16.append(g_traffic_light_list)
+
+        if len(self.R_bbox_1_16) < 16:
+            self.R_bbox_1_16.append(r_traffic_light_list)
+        else:
+            self.R_bbox_1_16.pop(0)
+            self.R_bbox_1_16.append(r_traffic_light_list)
+
+
+        # if self.vehicle_bbox_1_16:
+
+        birdview: BirdView = self.birdview_producer.produce(ego_pos, ego_yaw,
+                                                       agent_bbox_list, 
+                                                       self.vehicle_bbox_1_16,
+                                                       self.pedestrain_bbox_1_16,
+                                                       self.R_bbox_1_16,
+                                                       self.G_bbox_1_16,
+                                                       self.Y_bbox_1_16,
+                                                       obstacle_bbox_list)
     
+        # print(birdview.shape)
+
+
+
 
         topdown = BirdViewProducer.as_rgb(birdview)
+
+        # input BEV representation
+        roach_obs =  BirdViewProducer.as_roach_input(birdview)
+
+        # input state   
+        throttle =  actor_dict[ego_id]["control"]["throttle"]
+        steer =  actor_dict[ego_id]["control"]["steer"]
+        brake =  actor_dict[ego_id]["control"]["brake"]
+        gear =  actor_dict[ego_id]["control"]["gear"]
+        vel_x =  actor_dict[ego_id]["vel_x"]
+        vel_y =  actor_dict[ego_id]["vel_y"]
+        # throttle, steer, brake, gear/5.0 , vel_x, vel_y
+
+        # combine input
+
+
+        # birdview = np.expand_dims(birdview, 0)
+        # state = np.expand_dims(state, 0)
         
+        # obs_dict = {
+        #     'state': state.astype(np.float32),
+        #     'birdview': birdview
+        # }
+
+        policy_input = {}
+        policy_input['state'] = np.expand_dims([throttle, steer, brake, gear , vel_x, vel_y], 0).astype(np.float32)
+        policy_input['birdview'] = np.expand_dims(roach_obs, 0)
+
+
+        print(policy_input['state'].shape)
+        print(policy_input['birdview'].shape)
+
+        actions, values, log_probs, mu, sigma, features = self.policy.forward(
+            policy_input, deterministic=True, clip_action=True)
+        acc, steer = actions[0].astype(np.float64)
+
+        if acc >= 0.0:
+            throttle = acc
+            brake = 0.0
+        else:
+            throttle = 0.0
+            brake = np.abs(acc)
+
+        throttle = np.clip(throttle, 0, 1)
+        steer = np.clip(steer, -1, 1)
+        brake = np.clip(brake, 0, 1)
+        control = carla.VehicleControl(throttle=throttle, steer=steer, brake=brake)
         
-        
-        return topdown
+        # return roach_obs
+        return topdown[0:192, 56:248], control
         
         
         
@@ -1613,7 +1869,8 @@ def game_loop(args):
     pygame.font.init()
     world = None
 
-    try:
+    #try:
+    if True:
     
         client = carla.Client(args.host, args.port)
         client.set_timeout(10.0)
@@ -1707,6 +1964,40 @@ def game_loop(args):
         bev_map = BEV_MAP(args)
 
         clock = pygame.time.Clock()
+
+
+        # # 
+        #TODOs: 
+        # planner_list= {}
+        # _planner = GlobalRoutePlanner(world.world.get_map(), resolution=1.0)
+
+        # if len(self._target_transforms) == 0:
+        #     last_target_loc = self.vehicle.get_location()
+        #     ev_wp = self._map.get_waypoint(last_target_loc)
+        #     next_wp = ev_wp.next(6)[0]
+        #     new_target_transform = next_wp.transform
+        # else:
+        #     last_target_loc = self._target_transforms[-1].location
+        #     last_road_id = self._map.get_waypoint(last_target_loc).road_id
+        #     new_target_transform = np.random.choice([x[1] for x in self._spawn_transforms if x[0] != last_road_id])
+
+        # route_trace = self._planner.trace_route(last_target_loc, new_target_transform.location)
+        # self._global_route += route_trace
+        # self._target_transforms.append(new_target_transform)
+        # self._route_length += self._compute_route_length(route_trace)
+        # self._update_leaderboard_plan(route_trace)
+
+
+        #     #     if len(self._target_transforms) == 0:
+        #     # while self._route_length < 1000.0:
+        # _add_random_target()
+
+
+
+
+        # roach = Roach(client, world.player, world)
+
+
         while True:
 
             clock.tick_busy_loop(20)
@@ -1723,22 +2014,24 @@ def game_loop(args):
             world.tick(clock, frame, image, stored_path)
                 
             bev_map.collect_actor_data(world)
-            bev_map_rgb = bev_map.run_step(frame, world.player.id)            
+            bev_map_rgb, control = bev_map.run_step(frame, world.player.id)   
+
+
             surface = pygame.surfarray.make_surface(bev_map_rgb)
             surface = pygame.transform.flip(surface, True, False)
             surface = pygame.transform.rotate(surface, 90)
             
             
-            display.blit(surface, (0, 0))
+            display.blit(surface, (256, 0))
             
             
             
             # apply contorl for other vehicle 
-            
-            
+            # obs_roach = BirdViewProducer.as_roach_input(birdview)
+            # control_dict = roach.get_control(new_obs_dict)
 
             
-            world.player.apply_control(agent.run_step())
+            world.player.apply_control( control )#agent.run_step())
             
             
             for id in vehicles_list:
@@ -1765,9 +2058,9 @@ def game_loop(args):
             # control.manual_gear_shift = False
             # world.player.apply_control(control)
             
-    except Exception as e:
-          print(e)
-    finally:
+    # except Exception as e:
+    #       print(e)
+    # finally:
         settings = world.world.get_settings()
         settings.synchronous_mode = False 
         world.world.apply_settings(settings)
