@@ -86,7 +86,7 @@ from bird_eye_view.Mask import PixelDimensions, Loc
 ################
 
 
-
+from threading import Thread
 import carla
 
 from carla import ColorConverter as cc
@@ -111,7 +111,13 @@ from carla_gym.core.obs_manager.obs_manager_handler import ObsManagerHandler
 from carla_gym.core.task_actor.ego_vehicle.ego_vehicle_handler import EgoVehicleHandler
 from carla_gym.utils import config_utils
 from carla_gym.utils.traffic_light import TrafficLightHandler
+from navigation.global_route_planner import GlobalRoutePlanner
+from multiprocessing import Process, Pool
+import copy
 
+import torch.multiprocessing as mp
+# import torch.threading as threading
+import threading
 import gym
 from omegaconf import DictConfig, OmegaConf
 from importlib import import_module
@@ -258,6 +264,8 @@ class World(object):
         # cam_pos_index = self.camera_manager.transform_index if self.camera_manager is not None else 0
         # Get a random blueprint.
         blueprint = random.choice(self.world.get_blueprint_library().filter(self._actor_filter))
+        blueprint = self.world.get_blueprint_library().find('vehicle.lincoln.mkz_2017')
+        print(blueprint)
         blueprint.set_attribute('role_name', self.actor_role_name)
         if blueprint.has_attribute('color'):
             color = random.choice(blueprint.get_attribute('color').recommended_values)
@@ -468,7 +476,7 @@ class KeyboardControl(object):
                         world.constant_velocity_enabled = False
                         world.hud.notification("Disabled Constant Velocity Mode")
                     else:
-                        world.player.enable_constant_velocity(carla.Vector3D(17, 0, 0))
+                        world.player.enable_constanft_velocity(carla.Vector3D(17, 0, 0))
                         world.constant_velocity_enabled = True
                         world.hud.notification("Enabled Constant Velocity Mode at 60 km/h")
                 elif event.key > K_0 and event.key <= K_9:
@@ -1407,33 +1415,33 @@ class BEV_MAP():
         # init Roach-model 
         self.model = None # load roach model 
 
-        self.vehicle_bbox_1_16 = []
-        self.pedestrain_bbox_1_16 = []
+        self.vehicle_bbox_1_16 = {}
+        self.pedestrain_bbox_1_16 = {}
 
-        self.Y_bbox_1_16 = []
-        self.G_bbox_1_16 = []
-        self.R_bbox_1_16 = []
+        self.Y_bbox_1_16 = {}
+        self.G_bbox_1_16 = {}
+        self.R_bbox_1_16 = {}
 
+    def init_policy(self, policy = None):    # prepare policy
         # inti roach model 
-        #load config
+        wandb_path = "sonicokuo/cata_train_rl_FixSeed/o6gx5mka"
+        if wandb_path[-1] == '\n':
+               wandb_path = wandb_path[:-1]
+        api = wandb.Api()
+        run = api.run(wandb_path)
+        all_ckpts = [f for f in run.files() if 'ckpt' in f.name] #load a check points
+        f = max(all_ckpts, key=lambda x: int(x.name.split('_')[1].split('.')[0]))
+        print(f'Resume checkpoint latest {f.name}')
+        f.download(replace=True)
+        run.file('config_agent.yaml').download(replace=True)
         cfg = OmegaConf.load('config_agent.yaml')
         cfg = OmegaConf.to_container(cfg)
-        print(cfg['wb_run_path'])
+        self._ckpt = f.name
 
-        # download model checkpoint 
-        if cfg['wb_run_path'] is not None:
-            api = wandb.Api()
-            run = api.run(cfg['wb_run_path'])
-            all_ckpts = [f for f in run.files() if 'ckpt' in f.name] #load a check points
-        if cfg['wb_ckpt_step'] is None: # choose the checkpoint with the largest trained steps
-            f = max(all_ckpts, key=lambda x: int(x.name.split('_')[1].split('.')[0]))
-            print(f'Resume checkpoint latest {f.name}')
-        f.download(replace=True)
         ckpt = f.name
-        obs_configs = cfg['obs_configs']
+
         train_cfg = cfg['training'] 
 
-        # prepare policy
         policy_class = load_entry_point(cfg['policy']['entry_point'])
         policy_kwargs = cfg['policy']['kwargs']
         print(f'Loading wandb checkpoint: {ckpt}')
@@ -1442,12 +1450,19 @@ class BEV_MAP():
 
         self._wrapper_class = load_entry_point(cfg['env_wrapper']['entry_point'])
         self._wrapper_kwargs = cfg['env_wrapper']['kwargs']
-
-
-
-
-
         self.policy = policy
+
+        return policy
+    def set_policy(self, processed_policy):
+        policy = copy.deepcopy(processed_policy)
+        self.policy = policy
+
+    def init_vehicle_bbox(self, ego_id):
+        self.vehicle_bbox_1_16[ego_id] = []
+        self.pedestrain_bbox_1_16[ego_id] = []
+        self.Y_bbox_1_16[ego_id] = []
+        self.G_bbox_1_16[ego_id] = []
+        self.R_bbox_1_16[ego_id] = []
 
     def collect_actor_data(self, world):
         vehicles_id_list = []
@@ -1642,10 +1657,14 @@ class BEV_MAP():
         data["pedestrian_ids"] = pedestrian_id_list
 
         self.data = data
-        
-    def run_step(self, frame, ego_id):
-        
-        actor_dict =  self.data
+        return data
+
+    def set_data(self, proccessed_data):
+        self.data = proccessed_data
+
+    def run_step(self, result, frame, ego_id, route_list = None):
+        start_time = time.time()
+        actor_dict =  copy.deepcopy(self.data)
 
         ego_pos = Loc(x=actor_dict[ego_id]["location"]["x"], y=actor_dict[ego_id]["location"]["y"])
         ego_yaw = actor_dict[ego_id]["rotation"]["yaw"]
@@ -1687,19 +1706,19 @@ class BEV_MAP():
             # # 2 - G
             
             if actor_dict[id]["state"] == 0 :
-                r_traffic_light_list.append([Loc(x=pos_0[0], y=pos_0[1]), 
+                g_traffic_light_list.append([Loc(x=pos_0[0], y=pos_0[1]), 
                                         Loc(x=pos_1[0], y=pos_1[1]), 
                                         Loc(x=pos_2[0], y=pos_2[1]), 
                                         Loc(x=pos_3[0], y=pos_3[1]), 
                                         ])
-            elif actor_dict[id]["state"] == 1:
+            elif actor_dict[id]["state"] == 2:
                 g_traffic_light_list.append([Loc(x=pos_0[0], y=pos_0[1]), 
                                         Loc(x=pos_1[0], y=pos_1[1]), 
                                         Loc(x=pos_2[0], y=pos_2[1]), 
                                         Loc(x=pos_3[0], y=pos_3[1]), 
                                         ])  
-            elif actor_dict[id]["state"] == 2:
-                y_traffic_light_list.append([Loc(x=pos_0[0], y=pos_0[1]), 
+            elif actor_dict[id]["state"] == 1:
+                g_traffic_light_list.append([Loc(x=pos_0[0], y=pos_0[1]), 
                                         Loc(x=pos_1[0], y=pos_1[1]), 
                                         Loc(x=pos_2[0], y=pos_2[1]), 
                                         Loc(x=pos_3[0], y=pos_3[1]), 
@@ -1753,59 +1772,60 @@ class BEV_MAP():
             
 
 
-        if len(self.pedestrain_bbox_1_16) < 16:
-            self.pedestrain_bbox_1_16.append(pedestrian_bbox_list)
+        if len(self.pedestrain_bbox_1_16[ego_id]) < 16:
+            self.pedestrain_bbox_1_16[ego_id].append(pedestrian_bbox_list)
         else:
-            self.pedestrain_bbox_1_16.pop(0)
-            self.pedestrain_bbox_1_16.append(pedestrian_bbox_list)
+            self.pedestrain_bbox_1_16[ego_id].pop(0)
+            self.pedestrain_bbox_1_16[ego_id].append(pedestrian_bbox_list)
 
-        if len(self.vehicle_bbox_1_16) < 16:
-            self.vehicle_bbox_1_16.append(vehicle_bbox_list)
+        if len(self.vehicle_bbox_1_16[ego_id]) < 16:
+            self.vehicle_bbox_1_16[ego_id].append(vehicle_bbox_list)
         else:
-            self.vehicle_bbox_1_16.pop(0)
-            self.vehicle_bbox_1_16.append(vehicle_bbox_list)
+            self.vehicle_bbox_1_16[ego_id].pop(0)
+            self.vehicle_bbox_1_16[ego_id].append(vehicle_bbox_list)
 
 
-        if len(self.Y_bbox_1_16) < 16:
-            self.Y_bbox_1_16.append(y_traffic_light_list)
+        if len(self.Y_bbox_1_16[ego_id]) < 16:
+            self.Y_bbox_1_16[ego_id].append(y_traffic_light_list)
         else:
-            self.Y_bbox_1_16.pop(0)
-            self.Y_bbox_1_16.append(y_traffic_light_list)
+            self.Y_bbox_1_16[ego_id].pop(0)
+            self.Y_bbox_1_16[ego_id].append(y_traffic_light_list)
 
 
-        if len(self.G_bbox_1_16) < 16:
-            self.G_bbox_1_16.append(g_traffic_light_list)
+        if len(self.G_bbox_1_16[ego_id]) < 16:
+            self.G_bbox_1_16[ego_id].append(g_traffic_light_list)
         else:
-            self.G_bbox_1_16.pop(0)
-            self.G_bbox_1_16.append(g_traffic_light_list)
+            self.G_bbox_1_16[ego_id].pop(0)
+            self.G_bbox_1_16[ego_id].append(g_traffic_light_list)
 
-        if len(self.R_bbox_1_16) < 16:
-            self.R_bbox_1_16.append(r_traffic_light_list)
+        if len(self.R_bbox_1_16[ego_id]) < 16:
+            self.R_bbox_1_16[ego_id].append(r_traffic_light_list)
         else:
-            self.R_bbox_1_16.pop(0)
-            self.R_bbox_1_16.append(r_traffic_light_list)
+            self.R_bbox_1_16[ego_id].pop(0)
+            self.R_bbox_1_16[ego_id].append(r_traffic_light_list)
 
 
         # if self.vehicle_bbox_1_16:
 
         birdview: BirdView = self.birdview_producer.produce(ego_pos, ego_yaw,
                                                        agent_bbox_list, 
-                                                       self.vehicle_bbox_1_16,
-                                                       self.pedestrain_bbox_1_16,
-                                                       self.R_bbox_1_16,
-                                                       self.G_bbox_1_16,
-                                                       self.Y_bbox_1_16,
-                                                       obstacle_bbox_list)
+                                                       self.vehicle_bbox_1_16[ego_id],
+                                                       self.pedestrain_bbox_1_16[ego_id],
+                                                       self.R_bbox_1_16[ego_id],
+                                                       self.G_bbox_1_16[ego_id],
+                                                       self.Y_bbox_1_16[ego_id],
+                                                       obstacle_bbox_list,
+                                                       route_list)
     
         # print(birdview.shape)
 
 
 
 
-        topdown = BirdViewProducer.as_rgb(birdview)
+        # topdown = BirdViewProducer.as_rgb(birdview)
 
         # input BEV representation
-        roach_obs =  BirdViewProducer.as_roach_input(birdview)
+        roach_obs, new_array =  BirdViewProducer.as_roach_input(birdview)
 
         # input state   
         throttle =  actor_dict[ego_id]["control"]["throttle"]
@@ -1829,39 +1849,64 @@ class BEV_MAP():
 
         policy_input = {}
         policy_input['state'] = np.expand_dims([throttle, steer, brake, gear , vel_x, vel_y], 0).astype(np.float32)
+        # print(policy_input['state'])
         policy_input['birdview'] = np.expand_dims(roach_obs, 0)
 
-
-        print(policy_input['state'].shape)
-        print(policy_input['birdview'].shape)
-
-        actions, values, log_probs, mu, sigma, features = self.policy.forward(
-            policy_input, deterministic=True, clip_action=True)
-        acc, steer = actions[0].astype(np.float64)
-
-        if acc >= 0.0:
-            throttle = acc
-            brake = 0.0
-        else:
-            throttle = 0.0
-            brake = np.abs(acc)
-
-        throttle = np.clip(throttle, 0, 1)
-        steer = np.clip(steer, -1, 1)
-        brake = np.clip(brake, 0, 1)
-        control = carla.VehicleControl(throttle=throttle, steer=steer, brake=brake)
-        
+       
         # return roach_obs
-        return topdown[0:192, 56:248], control
+        result["bev_map_rgb"] = new_array
+        result["policy_input"] = policy_input
+        # return topdown[0:192, 56:248], policy_input
+        # return new_array, policy_input
+        self.policy_forward(result, [policy_input])
+        # print("finish one both", ego_id ,start_time - time.time(), frame - time.time())
         
-        
-        
+    def policy_forward(self, result, policy_inputs_list):    
+        control_elements_list = []
+        for policy_input in policy_inputs_list:
+            actions, values, log_probs, mu, sigma, features = self.policy.forward(
+                policy_input, deterministic=True, clip_action=True)
+                     
+            # print(actions)
+            for action in actions:
+                acc, steer = action.astype(np.float64)
+                if acc >= 0.0:
+                    throttle = acc
+                    brake = 0.0
+                else:
+                    throttle = 0.0
+                    brake = np.abs(acc)
+
+                throttle = np.clip(throttle, 0, 0.5)
+                steer = np.clip(steer, -1, 1)
+                brake = np.clip(brake, 0, 1)
+                control_elements = {}
+                control_elements['throttle'] = throttle
+                control_elements['steer'] = steer
+                control_elements['brake'] = brake
+                control_elements_list.append(control_elements)
+        result["control_elements_list"] = control_elements_list
+        # return control_elements_list
         # return contorl 
         
         
 # ==============================================================================
 # -- game_loop() ---------------------------------------------------------------
 # ==============================================================================
+
+def check_close(ev_loc, loc0, distance = 3):
+    # ev_location = self.vehicle.get_location()
+    # closest_idx = 0
+
+    # for i in range(len(self._global_route)-1):
+    #     if i > windows_size:
+    #         break
+
+    #     loc0 = self._global_route[i][0].transform.location
+    #     loc1 = self._global_route[i+1][0].transform.location
+
+    if ev_loc.distance(loc0) < distance:
+        return True
 
 
 def game_loop(args):
@@ -1881,7 +1926,7 @@ def game_loop(args):
         
         
         display = pygame.display.set_mode(
-            (512, 512),
+            (512, 900),
             pygame.HWSURFACE | pygame.DOUBLEBUF)
         display.fill((0,0,0))
         pygame.display.flip()
@@ -1918,36 +1963,39 @@ def game_loop(args):
         random.shuffle(waypoint_list)
         blueprints = world.world.get_blueprint_library().filter('vehicle.*')
 
-            
-        # for num_of_vehicles, transform in enumerate(waypoint_list):
-        #     if num_of_vehicles > 2:
-        #         break
-        #     blueprint = random.choice(blueprints)
-        #     if blueprint.has_attribute('color'):
-        #         color = random.choice(blueprint.get_attribute('color').recommended_values)
-        #         blueprint.set_attribute('color', color)
-        #     if blueprint.has_attribute('driver_id'):
-        #         driver_id = random.choice(blueprint.get_attribute('driver_id').recommended_values)
-        #         blueprint.set_attribute('driver_id', driver_id)
+        actor_numbers = 10
+
+        for num_of_vehicles, transform in enumerate(waypoint_list):
+            if num_of_vehicles == actor_numbers:
+                break
+            blueprint = world.world.get_blueprint_library().find('vehicle.lincoln.mkz_2017')
+
+            if blueprint.has_attribute('color'):
+                color = random.choice(blueprint.get_attribute('color').recommended_values)
+                blueprint.set_attribute('color', color)
+            if blueprint.has_attribute('driver_id'):
+                driver_id = random.choice(blueprint.get_attribute('driver_id').recommended_values)
+                blueprint.set_attribute('driver_id', driver_id)
                 
-        #     # blueprint, transform
+            # blueprint, transform
             
-        #     try:
+            try:
         
-        #         other_agent = client.get_world().spawn_actor(blueprint, transform)
-        #         id = other_agent.id
-        #         vehicles_list.append(id)
+                other_agent = client.get_world().spawn_actor(blueprint, transform)
+                id = other_agent.id
+                vehicles_list.append(id)
                 
-        #         agent_dict[id] = {}
-        #         agent_dict[id]["agent"] = other_agent
+                agent_dict[id] = {}
+                agent_dict[id]["agent"] = other_agent
                 
-        #         # agent = BehaviorAgent(other_agent, behavior='aggressive')
-        #         # destination = random.choice(spawn_points).location
-        #         # agent.set_destination(destination)
+                # agent = BehaviorAgent(other_agent, behavior='aggressive')
+                # destination = random.choice(spawn_points).location
+                # agent.set_destination(destination)
                 
-        #         # agent_dict[id]["BehaviorAgent"] = agent
-        #     except:
-        #         print("Spawn failed because of collision at spawn position")
+                # agent_dict[id]["BehaviorAgent"] = agent
+            except:
+                print("Spawn failed because of collision at spawn position")
+      
             
             
         
@@ -1956,53 +2004,36 @@ def game_loop(args):
         agent.set_destination(destination)
 
 
-        
-        
-
-        
-        
-        bev_map = BEV_MAP(args)
+        planner = GlobalRoutePlanner(map, resolution=1.0)
 
         clock = pygame.time.Clock()
 
+        player_bev_map = BEV_MAP(args)
+        processed_policy = player_bev_map.init_policy()
+        player_bev_map.init_vehicle_bbox(world.player.id)
+        destination = random.choice(spawn_points).location
+        current_route = planner.trace_route(world.player.get_location(), destination)
 
-        # # 
-        #TODOs: 
-        # planner_list= {}
-        # _planner = GlobalRoutePlanner(world.world.get_map(), resolution=1.0)
+        agent_bev_maps = {}
+        current_routes = {}
+        for id in vehicles_list:
+            print(id)
+            agent_bev_map = BEV_MAP(args)
+            agent_bev_map.init_vehicle_bbox(id)
+            agent_bev_map.set_policy(processed_policy)
+            destination = random.choice(spawn_points).location
 
-        # if len(self._target_transforms) == 0:
-        #     last_target_loc = self.vehicle.get_location()
-        #     ev_wp = self._map.get_waypoint(last_target_loc)
-        #     next_wp = ev_wp.next(6)[0]
-        #     new_target_transform = next_wp.transform
-        # else:
-        #     last_target_loc = self._target_transforms[-1].location
-        #     last_road_id = self._map.get_waypoint(last_target_loc).road_id
-        #     new_target_transform = np.random.choice([x[1] for x in self._spawn_transforms if x[0] != last_road_id])
-
-        # route_trace = self._planner.trace_route(last_target_loc, new_target_transform.location)
-        # self._global_route += route_trace
-        # self._target_transforms.append(new_target_transform)
-        # self._route_length += self._compute_route_length(route_trace)
-        # self._update_leaderboard_plan(route_trace)
+            agent_bev_maps[id] = agent_bev_map
+            current_routes[id] = []
 
 
-        #     #     if len(self._target_transforms) == 0:
-        #     # while self._route_length < 1000.0:
-        # _add_random_target()
-
-
-
-
-        # roach = Roach(client, world.player, world)
-
-
+        avg_FPS = 0
         while True:
 
             clock.tick_busy_loop(20)
             frame = world.world.tick()
-            
+            # print("++++start++++")
+            # start_time = time.time()
             if controller.parse_events(client, world, clock):
                 return
 
@@ -2012,40 +2043,220 @@ def game_loop(args):
                         
 
             world.tick(clock, frame, image, stored_path)
-                
-            bev_map.collect_actor_data(world)
-            bev_map_rgb, control = bev_map.run_step(frame, world.player.id)   
+            avg_FPS = 0.95 * avg_FPS + 0.05 * clock.get_fps()
+            print("Multithreading avg FPS:", avg_FPS)
+            # print(start_time - time.time())
+            # start_time = time.time()
+            # print("player_route")
+            # regenerate a destination when the agent deviates from the current route
+            if not check_close(world.player.get_location(), current_route[0][0].transform.location, 6):
+                destination = current_route[-1][0].transform.location
+                current_route = planner.trace_route(world.player.get_location(), destination)
+            
+            # Delete reached points from current route
+            while check_close(world.player.get_location(), current_route[0][0].transform.location):
+                current_route.pop(0)
+                if len(current_route) == 0:
+                    new_destination = random.choice(spawn_points).location
+                    current_route = planner.trace_route(world.player.get_location(), new_destination)
 
+            
+            # Generate new destination if the current one is close 
+            if len(current_route) < 10:
+                new_destination = random.choice(spawn_points).location
+                new_route = planner.trace_route(current_route[-1][0].transform.location, new_destination)
+                temp_route = current_route + new_route
+                current_route = temp_route
 
-            surface = pygame.surfarray.make_surface(bev_map_rgb)
-            surface = pygame.transform.flip(surface, True, False)
-            surface = pygame.transform.rotate(surface, 90)
-            
-            
-            display.blit(surface, (256, 0))
-            
-            
-            
-            # apply contorl for other vehicle 
-            # obs_roach = BirdViewProducer.as_roach_input(birdview)
-            # control_dict = roach.get_control(new_obs_dict)
-
-            
-            world.player.apply_control( control )#agent.run_step())
-            
-            
+            route_trace = current_route[0:80]    
+            # collect data for all agents
+            processed_data = player_bev_map.collect_actor_data(world)
+            route_list = []
+            for wp in route_trace:
+                wp = wp[0]
+                route_list.append(Loc(x=wp.transform.location.x, y=wp.transform.location.y))
+            # print(start_time - time.time())
+            start_time = time.time()
+            # print("player_runstep")
+            result = {}
+            # player_bev_map.run_step(result, frame, world.player.id, route_list)
+            # bev_map_rgb = result["bev_map_rgb"]
+            # # policy_input = result["policy_input"]
+            # # print(start_time - time.time())
+            # # start_time = time.time()
+            # # print("player_forward")            
+            # # player_bev_map.policy_forward(result, [policy_input])
+            # control_elements_list = result["control_elements_list"]
+            # print("player_all", start_time - time.time())
+            # # start_time = time.time()
+            # # print("player_render")
+            # # for render
+            # surface = pygame.surfarray.make_surface(bev_map_rgb)
+            # surface = pygame.transform.flip(surface, True, False)
+            # surface = pygame.transform.rotate(surface, 90)
+            # display.blit(surface, (256, 0))
+            # # print(start_time - time.time())
+            # # start_time = time.time()
+            # # print("player_control")
+            # control_elements = control_elements_list[0]
+            # control = carla.VehicleControl(throttle=control_elements['throttle'], steer=control_elements['steer'], brake=control_elements['brake'])
+        
+            # world.player.apply_control( control )#agent.run_step())
+            # print(start_time - time.time())
+            # print("+++++++actors++++++++++")
+            route_trace = {}
+            count = 1
+            inputs = []
+            start_time_r = time.time()
             for id in vehicles_list:
+                if len(current_routes[id]) == 0:
+                    new_destination = random.choice(spawn_points).location
+                    current_routes[id] = planner.trace_route(agent_dict[id]['agent'].get_location(), new_destination)
                 
-                # get
-                bev_map_rgb = bev_map.run_step(frame, id) 
+                # regenerate a route when the agent deviates from the current route
+                if not check_close(agent_dict[id]["agent"].get_location(), current_routes[id][0][0].transform.location, 6):
+                    destination = current_routes[id][-1][0].transform.location
+                    current_routes[id] = planner.trace_route(agent_dict[id]["agent"].get_location(), destination)
                 
-                
-                # agent_dict[id]["agent"].apply_control()
-                
+                # Delete reached points from current route
+                while check_close(agent_dict[id]["agent"].get_location(), current_routes[id][0][0].transform.location):
+                    current_routes[id].pop(0)
+                    if len(current_routes[id]) == 0:
+                        new_destination = random.choice(spawn_points).location
+                        current_routes[id] = planner.trace_route(agent_dict[id]["agent"].get_location(), new_destination)
+                # Generate new destination if the current one is close 
+                if len(current_routes[id]) < 10:
+                    new_destination = random.choice(spawn_points).location
+                    new_route = planner.trace_route(current_routes[id][-1][0].transform.location, new_destination)
+                    temp_route = current_routes[id] + new_route
+                    current_routes[id] = temp_route       
+
+                route_trace[id] = current_routes[id][0:60]
+                # bev_map_rgb, control = bev_map.run_step(frame, id, route_trace[id]) 
+                # agent_dict[id]["agent"].apply_control(control)
+
+                route_list = []
+                for wp in route_trace[id]:
+                    wp = wp[0]
+                    route_list.append(Loc(x=wp.transform.location.x, y=wp.transform.location.y))
+                # #original
+
+                # bev_map_rgb, control_elements = bev_map.run_step(frame, id, route_list) 
+                # control = carla.VehicleControl(throttle=control_elements['throttle'], steer=control_elements['steer'], brake=control_elements['brake'])
+                # agent_dict[id]["agent"].apply_control(control)
+                start_time = time.time()
+                inputs.append([start_time, id, route_list])
+
+
+
+            #     result = {}
+            #     agent_bev_maps[id].set_data(processed_data)
+            #     agent_bev_maps[id].run_step(result, start_time, id, route_list)
+
+            #     bev_map_rgb = result["bev_map_rgb"]
+            #     policy_input = result["policy_input"]     
+            #     control_elements_list = agent_bev_maps[id].policy_forward([policy_input])   
+            #     control_elements = control_elements_list[0]
+            #     control = carla.VehicleControl(throttle=control_elements['throttle'], steer=control_elements['steer'], brake=control_elements['brake'])
+            #     agent_dict[id]["agent"].apply_control(control)
+
+            #     if count < 4:
+            #         surface = pygame.surfarray.make_surface(bev_map_rgb)
+            #         surface = pygame.transform.flip(surface, True, False)
+            #         surface = pygame.transform.rotate(surface, 90)
+            #         display.blit(surface, (256, 210*count))                
+            #     count += 1
+
+            # print("finish all",start_time_r - time.time())
+            # print("finish routelist",start_time_r - time.time())
+
+            start_time_run = time.time()
+            t_list = []
+            results = [{} for i in range(actor_numbers)]
+            for i in range(actor_numbers):
+                input = [results[i]]
+                input = input + inputs[i]
+                agent_bev_maps[vehicles_list[i]].set_data(processed_data)
+                t = Thread(target=agent_bev_maps[vehicles_list[i]].run_step, args=tuple(input))
+                t_list.append(t)
+                t.start()
+            for t in t_list:
+                t.join()
+
+            # print("finish both",start_time_run - time.time())
+            # print("finish runstep",start_time_run - time.time())
             
+            
+            # start_time = time.time()
+            # t2_list = []
+            # for i in range(actor_numbers):
+            #     policy_input = [results[i]]
+            #     policy_input = policy_input + [[results[i]["policy_input"]]]
+            #     t = Thread(target=agent_bev_maps[vehicles_list[i]].policy_forward, args=tuple(policy_input))
+            #     t2_list.append(t)
+            #     t.start()
+            # for t in t2_list:
+            #     t.join()
+            # print("finish infer",start_time - time.time())
+
+            for i in range(4):
+                bev_map_rgb = results[i]["bev_map_rgb"]
+                surface = pygame.surfarray.make_surface(bev_map_rgb)
+                surface = pygame.transform.flip(surface, True, False)
+                surface = pygame.transform.rotate(surface, 90)
+                display.blit(surface, (256, 210*i))  
+
+            start_time = time.time()
+            for i in range(actor_numbers):
+                control_elements_list = results[i]["control_elements_list"] 
+                control_elements = control_elements_list[0]
+                control = carla.VehicleControl(throttle=control_elements['throttle'], steer=control_elements['steer'], brake=control_elements['brake'])
+                agent_dict[vehicles_list[i]]["agent"].apply_control(control)
+                
+
+            # print("finish all",start_time_r - time.time())
+
+
+
+
+
+            # policy_inputs_list = []
+            # for bev_map_rgb, policy_input in image_inputs:
+
+            #     policy_inputs_list.append(policy_input)
+
+            #     # Visualize other agents
+            #     if count < 4:
+            #         surface = pygame.surfarray.make_surface(bev_map_rgb)
+            #         surface = pygame.transform.flip(surface, True, False)
+            #         surface = pygame.transform.rotate(surface, 90)
+            #         display.blit(surface, (256, 210*count))                
+            #     count += 1
+                
+            # # print("finish control and render",start_time - time.time())
+            # # start_time = time.time()
+            #     # print("finish one",start_time - time.time())
+            #     # start_time = time.time()
+            #     # agent_dict[id]["agent"].apply_control()
+            
+            # # print(policy_inputs_list)
+            # start_time = time.time()
+            # control_elements_list = bev_map.policy_forward(policy_inputs_list)
+            # print("finish all forward",start_time - time.time())
+            # start_time = time.time()
+            # i = 0
+            # for control_elements in control_elements_list:
+            #     control = carla.VehicleControl(throttle=control_elements['throttle'], steer=control_elements['steer'], brake=control_elements['brake'])
+            #     agent_dict[vehicles_list[i]]["agent"].apply_control(control)
+            #     i+=1
+            # print("finish all control",start_time - time.time())
+            # start_time = time.time()
             world.hud.render(display)
             
             pygame.display.flip()
+
+            # print("++++end++++")
+
             
             
             
