@@ -1666,6 +1666,7 @@ class BEV_MAP():
         start_time = time.time()
         actor_dict =  copy.deepcopy(self.data)
 
+        ego_loc = carla.Location(x=actor_dict[ego_id]["location"]["x"], y=actor_dict[ego_id]["location"]["y"])
         ego_pos = Loc(x=actor_dict[ego_id]["location"]["x"], y=actor_dict[ego_id]["location"]["y"])
         ego_yaw = actor_dict[ego_id]["rotation"]["yaw"]
 
@@ -1691,6 +1692,9 @@ class BEV_MAP():
         traffic_light_id_list = list(actor_dict["traffic_light_ids"])
 
         for id in traffic_light_id_list:
+            traffic_light_loc = carla.Location(x=actor_dict[id]['location']['x'], y=actor_dict[id]['location']['y'])
+            if not check_close(ego_loc, traffic_light_loc, 36): #35.95m
+                continue
             pos_0 = actor_dict[id]["cord_bounding_box"]["cord_0"]
             pos_1 = actor_dict[id]["cord_bounding_box"]["cord_1"]
             pos_2 = actor_dict[id]["cord_bounding_box"]["cord_2"]
@@ -1739,6 +1743,9 @@ class BEV_MAP():
                                         ])
             
         for id in vehicle_id_list:
+            traffic_light_loc = carla.Location(x=actor_dict[id]['location']['x'], y=actor_dict[id]['location']['y'])
+            if not check_close(ego_loc, traffic_light_loc, 36): #35.95m
+                continue
             pos_0 = actor_dict[id]["cord_bounding_box"]["cord_0"]
             pos_1 = actor_dict[id]["cord_bounding_box"]["cord_4"]
             pos_2 = actor_dict[id]["cord_bounding_box"]["cord_6"]
@@ -1966,7 +1973,7 @@ def game_loop(args):
         actor_numbers = 10
 
         for num_of_vehicles, transform in enumerate(waypoint_list):
-            if num_of_vehicles == actor_numbers:
+            if len(vehicles_list) == actor_numbers:
                 break
             blueprint = world.world.get_blueprint_library().find('vehicle.lincoln.mkz_2017')
 
@@ -2030,7 +2037,7 @@ def game_loop(args):
         avg_FPS = 0
         while True:
 
-            clock.tick_busy_loop(20)
+            clock.tick_busy_loop(30)
             frame = world.world.tick()
             # print("++++start++++")
             # start_time = time.time()
@@ -2043,7 +2050,7 @@ def game_loop(args):
                         
 
             world.tick(clock, frame, image, stored_path)
-            avg_FPS = 0.95 * avg_FPS + 0.05 * clock.get_fps()
+            avg_FPS = 0.98 * avg_FPS + 0.02 * clock.get_fps()
             print("Multithreading avg FPS:", avg_FPS)
             # print(start_time - time.time())
             # start_time = time.time()
