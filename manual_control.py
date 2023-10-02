@@ -1692,8 +1692,8 @@ class BEV_MAP():
         traffic_light_id_list = list(actor_dict["traffic_light_ids"])
 
         for id in traffic_light_id_list:
-            traffic_light_loc = carla.Location(x=actor_dict[id]['location']['x'], y=actor_dict[id]['location']['y'])
-            if not check_close(ego_loc, traffic_light_loc, 36): #35.95m
+            traffic_light_loc = carla.Location(x=actor_dict[id]["cord_bounding_box"]["cord_0"][0], y=actor_dict[id]["cord_bounding_box"]["cord_0"][1])
+            if not check_close(ego_loc, traffic_light_loc, 45): #35.95m
                 continue
             pos_0 = actor_dict[id]["cord_bounding_box"]["cord_0"]
             pos_1 = actor_dict[id]["cord_bounding_box"]["cord_1"]
@@ -1855,12 +1855,13 @@ class BEV_MAP():
         # }
 
         policy_input = {}
-        policy_input['state'] = np.expand_dims([throttle, steer, brake, gear , vel_x, vel_y], 0).astype(np.float32)
+        policy_input['state'] = np.expand_dims([throttle, steer, brake, gear/5, vel_x, vel_y], 0).astype(np.float32)
         # print(policy_input['state'])
         policy_input['birdview'] = np.expand_dims(roach_obs, 0)
 
        
         # return roach_obs
+        # result["bev_map_rgb"] = topdown[0:192, 56:248]
         result["bev_map_rgb"] = new_array
         result["policy_input"] = policy_input
         # return topdown[0:192, 56:248], policy_input
@@ -2083,6 +2084,8 @@ def game_loop(args):
                 wp = wp[0]
                 route_list.append(Loc(x=wp.transform.location.x, y=wp.transform.location.y))
             # print(start_time - time.time())
+
+            ###################player control#####################
             start_time = time.time()
             # print("player_runstep")
             result = {}
@@ -2097,6 +2100,7 @@ def game_loop(args):
             # print("player_all", start_time - time.time())
             # # start_time = time.time()
             # # print("player_render")
+
             # # for render
             # surface = pygame.surfarray.make_surface(bev_map_rgb)
             # surface = pygame.transform.flip(surface, True, False)
@@ -2108,7 +2112,9 @@ def game_loop(args):
             # control_elements = control_elements_list[0]
             # control = carla.VehicleControl(throttle=control_elements['throttle'], steer=control_elements['steer'], brake=control_elements['brake'])
         
-            # world.player.apply_control( control )#agent.run_step())
+            # world.player.apply_control( control )
+            ###################player control#####################
+
             # print(start_time - time.time())
             # print("+++++++actors++++++++++")
             route_trace = {}
