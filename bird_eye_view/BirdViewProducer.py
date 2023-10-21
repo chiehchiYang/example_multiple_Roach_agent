@@ -5,6 +5,7 @@ import os
 import ujson
 
 from bird_eye_view.Mask import PixelDimensions, square_fitting_rect_at_any_rotation, MapMaskGenerator, RenderingWindow, BirdViewMasks, Coord, Loc, COLOR_OFF, COLOR_ON
+import pygame
 
 RgbCanvas = np.ndarray  # [np.uint8] with shape (y, x, 3)
 BirdView = np.ndarray  # [np.uint8] with shape (level, y, x)
@@ -26,30 +27,31 @@ class RGB:
     ROAD = (46, 52, 54)
     ROUTE = (136, 138, 133)
     ROAD_LINE = (255, 140, 255)
-    PEDESTRIANS_16 = (51, 255, 255)
-    PEDESTRIANS_11 = (102, 255, 255)
-    PEDESTRIANS_6 = (153, 255, 255)
-    PEDESTRIANS_1 = (204, 255, 255)
-    VEHICLES_16 = (51, 51, 255)
-    VEHICLES_11 = (102, 102, 255)
-    VEHICLES_6 = (153, 153, 255)
-    VEHICLES_1 = (204, 204, 255)
+    PEDESTRIANS_1 = (51, 255, 255)
+    PEDESTRIANS_6 = (102, 255, 255)
+    PEDESTRIANS_11 = (153, 255, 255)
+    PEDESTRIANS_16 = (204, 255, 255)
+    VEHICLES_1 = (51, 51, 255)
+    VEHICLES_6 = (102, 102, 255)
+    VEHICLES_11 = (153, 153, 255)
+    VEHICLES_16 = (204, 204, 255)
 
-    R_LIGHT_STOP_16 = (255, 51, 51)
-    R_LIGHT_STOP_11 = (255, 102, 102)
-    R_LIGHT_STOP_6 = (255, 153, 153)
-    R_LIGHT_STOP_1 = (255, 204, 204)
+    R_LIGHT_STOP_1 = (255, 51, 51)
+    R_LIGHT_STOP_6 = (255, 102, 102)
+    R_LIGHT_STOP_11 = (255, 153, 153)
+    R_LIGHT_STOP_16 = (255, 204, 204)
 
-    Y_LIGHT_STOP_16 = (255, 255, 51)
-    Y_LIGHT_STOP_11 = (255, 255, 102)
-    Y_LIGHT_STOP_6 = (255, 255, 153)
-    Y_LIGHT_STOP_1 = (255, 255, 204)
+    Y_LIGHT_STOP_1 = (255, 255, 51)
+    Y_LIGHT_STOP_6 = (255, 255, 102)
+    Y_LIGHT_STOP_11 = (255, 255, 153)
+    Y_LIGHT_STOP_16 = (255, 255, 204)
 
-    G_LIGHT_STOP_16 = (51, 255, 51)
-    G_LIGHT_STOP_11 = (102, 255, 102)
-    G_LIGHT_STOP_6 = (153, 255, 153)
-    G_LIGHT_STOP_1 = (204, 255, 204)
+    G_LIGHT_STOP_1 = (51, 255, 51)
+    G_LIGHT_STOP_6 = (102, 255, 102)
+    G_LIGHT_STOP_11 = (153, 255, 153)
+    G_LIGHT_STOP_16 = (204, 255, 204)
 
+    OBSTACLES = (51, 255, 51)
     # 
     # UNLABELES = (0, 0, 0)
 
@@ -74,6 +76,8 @@ class RGB:
 
 # 9 channel 
 RGB_BY_MASK = {
+
+    BirdViewMasks.OBSTACLES: RGB.OBSTACLES,
 
     BirdViewMasks.AGENT: RGB.CHAMELEON,
 
@@ -148,7 +152,15 @@ def rotate(image, angle, center=None, scale=1.0):
     # return the rotated image
     return rotated
 
-
+def tint(color, factor):
+    r, g, b = color
+    r = int(r + (255-r) * factor)
+    g = int(g + (255-g) * factor)
+    b = int(b + (255-b) * factor)
+    r = min(r, 255)
+    g = min(g, 255)
+    b = min(b, 255)
+    return (r, g, b)
 
 class BirdViewProducer:
     def __init__(self,
@@ -182,7 +194,7 @@ class BirdViewProducer:
         
     # draw 
     def produce(
-        self, vehicle_loc, yaw, agent_bbox_list, vehicle_bbox_1_16, pedestrain_bbox_1_16, r_bbox_1_16, g_bbox_1_16, y_bbox_1_16, obstacle_bbox_list, 
+        self, vehicle_loc, yaw, agent_bbox_list, vehicle_bbox_1_16, pedestrain_bbox_1_16, r_bbox_1_16, g_bbox_1_16, y_bbox_1_16, obstacle_bbox_list, route_list
     ) -> BirdView:
         
         # Reusing already generated static masks for whole map
@@ -221,14 +233,28 @@ class BirdViewProducer:
         self.masks_generator.enable_local_rendering_mode(rendering_window)
         
         
+        # give route waypoint [0 - 80 ]
+        # route_list = []
+        # for wp in route_trace:
+        #     wp = wp[0]
+        #     route_list.append(Loc(x=wp.transform.location.x, y=wp.transform.location.y))
+
+
         # draw actor 
+        # print(obstacle_bbox_list)
         masks = self._render_actors_masks(agent_bbox_list, 
                                           vehicle_bbox_1_16, 
                                           pedestrain_bbox_1_16,
                                           r_bbox_1_16, g_bbox_1_16, y_bbox_1_16, 
                                           obstacle_bbox_list, 
+                                          route_list,
                                           masks)
         
+
+
+
+        #        route_mask = np.zeros([self._width, self._width], dtype=np.uint8)
+
         # agent_bbox_list,
         # vehicle_bbox_list,
         # pedestrians_bbox_list,
@@ -254,6 +280,7 @@ class BirdViewProducer:
         pedestrain_bbox_1_16,
         r_bbox_1_16, g_bbox_1_16, y_bbox_1_16,
         obstacle_bbox_list,
+        route_list,
         masks: np.ndarray,
     ) -> np.ndarray:
         """Fill masks with ones and zeros (more precisely called as "bitmask").
@@ -267,7 +294,11 @@ class BirdViewProducer:
         # masks[BirdViewMasks.RED_LIGHTS.value] = red_lights_mask
         # masks[BirdViewMasks.YELLOW_LIGHTS.value] = yellow_lights_mask
         # masks[BirdViewMasks.GREEN_LIGHTS.value] = green_lights_mask
-        
+
+
+        masks[BirdViewMasks.ROUTE.value] = self.masks_generator.draw_route_mask(
+            route_list
+        )
 
         
         masks[BirdViewMasks.AGENT.value] = self.masks_generator.draw_bbox_mask(
@@ -412,9 +443,10 @@ class BirdViewProducer:
         # masks[BirdViewMasks.PEDESTRIANS.value] = self.masks_generator.draw_bbox_mask(
         #     pedestrians_bbox_list
         # )
-        # masks[BirdViewMasks.OBSTACLES.value] = self.masks_generator.draw_bbox_mask(
-        #     obstacle_bbox_list
-        # )
+        # print(obstacle_bbox_list)
+        masks[BirdViewMasks.OBSTACLES.value] = self.masks_generator.draw_bbox_mask(
+            obstacle_bbox_list
+        )
         
         
         return masks
@@ -431,6 +463,18 @@ class BirdViewProducer:
             mask = birdview[mask_type]
             # If mask above contains 0, don't overwrite content of canvas (0 indicates transparency)
             rgb_canvas[nonzero_indices(mask)] = rgb_color
+            
+            # print(mask_type)
+            # print(mask)
+            # print(nonzero_indices(mask))
+            # true_flag = 0
+            # for i in nonzero_indices(mask):
+            #     if True in i:
+            #         true_flag = 1
+            # if true_flag ==1:
+            #     print(mask_type)
+
+
         return rgb_canvas
     
 
@@ -448,8 +492,6 @@ class BirdViewProducer:
         # 304 --> [56, 248]
         #y [0, 192]
 
-        print(birdview[BirdViewMasks.VEHICLES_16][0:192, 56:248].shape)
-
 
         for i in range(4):
             vehicle_history.append(birdview[BirdViewMasks.VEHICLES_16+i][0:192, 56:248] * 255)
@@ -461,15 +503,31 @@ class BirdViewProducer:
         trafficlight_stop_history = []
         for i in range(4):
             single_time_frame = np.zeros([h, w], dtype=np.uint8)
-            single_time_frame[birdview[BirdViewMasks.G_LIGHT_STOP_16+i][0:192, 56:248]] = 80
-            single_time_frame[birdview[BirdViewMasks.Y_LIGHT_STOP_16+i][0:192, 56:248]] = 170
-            single_time_frame[birdview[BirdViewMasks.R_LIGHT_STOP_16+i][0:192, 56:248]] = 255
+            single_time_frame[birdview[BirdViewMasks.G_LIGHT_STOP_16+i][0:192, 56:248].astype(bool)] = 80
+            single_time_frame[birdview[BirdViewMasks.Y_LIGHT_STOP_16+i][0:192, 56:248].astype(bool)] = 170
+            single_time_frame[birdview[BirdViewMasks.R_LIGHT_STOP_16+i][0:192, 56:248].astype(bool)] = 255
             trafficlight_stop_history.append(single_time_frame)
 
         observation = np.stack((road_mask, route_mask, road_line_mask, *vehicle_history, *walker_history, *trafficlight_stop_history), axis=2)
         observation = np.transpose(observation, [2, 0, 1])
         # print(observation)
-        return observation
+
+        new_array = np.zeros([w, h, 3], dtype=np.uint8)
+        new_array[birdview[BirdViewMasks.ROAD][0:192, 56:248].astype(bool)] = (46, 52, 54)
+        new_array[birdview[BirdViewMasks.ROUTE][0:192, 56:248].astype(bool)] = (136, 138, 133)
+        new_array[birdview[BirdViewMasks.ROAD_LINE][0:192, 56:248].astype(bool)] = (255, 140, 255)        
+        for i in range(4):
+            new_array[vehicle_history[i].astype(bool)] = tint((0, 0, 255), (4-i)*0.2)
+            new_array[walker_history[i].astype(bool)] = tint((0, 255, 255), (4-i)*0.2)
+        new_array[birdview[BirdViewMasks.G_LIGHT_STOP_1][0:192, 56:248].astype(bool)] = tint((0, 255, 0), (4-i)*0.2)
+        new_array[birdview[BirdViewMasks.Y_LIGHT_STOP_1][0:192, 56:248].astype(bool)] = tint((255, 255, 0), (4-i)*0.2)
+        new_array[birdview[BirdViewMasks.R_LIGHT_STOP_1][0:192, 56:248].astype(bool)] = tint((255, 0, 0), (4-i)*0.2)                
+        # print(new_array)
+ 
+
+
+
+        return observation, new_array
 
 
     

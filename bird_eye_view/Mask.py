@@ -167,6 +167,23 @@ class MapMaskGenerator:
         for corners in bbox_list:
             corners = [self.location_to_pixel(loc) for loc in corners]
             cv2.fillPoly(img=canvas, pts=np.int32([corners]), color=COLOR_ON)
+        return canvas 
+
+    def draw_route_mask(self, route_list) -> Mask:
+        canvas = self.make_empty_mask()
+        # Carla corrin to pixel 
+        # route_in_pixel = np.array([[self._world_to_pixel(wp.transform.location)]
+        #                            for wp, _ in self._parent_actor.route_plan[0:80]])
+        piel_points_list = []
+        for loc in route_list:
+            piel_points_list.append(self.location_to_pixel(loc) )
+
+        piel_points_array = np.array(piel_points_list)
+
+        
+        cv2.polylines(canvas, [np.round(piel_points_array).astype(np.int32)], False, 1, thickness=16)
+        
+            #cv2.fillPoly(img=canvas, pts=np.int32([corners]), color=COLOR_ON)
         return canvas   
 
     def draw_line_mask(self, bbox_list) -> Mask:
@@ -334,7 +351,8 @@ class BirdViewMasks(IntEnum):
     # RED_LIGHTS = 7
     # YELLOW_LIGHTS = 6
     # GREEN_LIGHTS = 5
-
+    
+    OBSTACLES=24
     AGENT = 23
     Y_LIGHT_STOP_1 = 22
     Y_LIGHT_STOP_6 = 21
