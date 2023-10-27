@@ -219,7 +219,10 @@ class BirdViewProducer:
             ),
             dtype=np.uint8,
         )
-        
+        # print(masks.shape)
+        # print(len(self.full_road_cache))
+        # print(len(self.full_road_cache[0]))
+
         masks[BirdViewMasks.ROAD.value] = self.full_road_cache[
             cropping_rect.vslice, cropping_rect.hslice
         ]
@@ -294,6 +297,7 @@ class BirdViewProducer:
         # masks[BirdViewMasks.RED_LIGHTS.value] = red_lights_mask
         # masks[BirdViewMasks.YELLOW_LIGHTS.value] = yellow_lights_mask
         # masks[BirdViewMasks.GREEN_LIGHTS.value] = green_lights_mask
+
 
 
         masks[BirdViewMasks.ROUTE.value] = self.masks_generator.draw_route_mask(

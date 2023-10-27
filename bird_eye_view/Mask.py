@@ -288,7 +288,7 @@ class MapMaskGenerator:
 
         return canvas
         
-    def location_to_pixel(self, loc) -> Coord:
+    def location_to_pixel(self, loc, full=False) -> Coord:
         """Convert world coordinates to pixel coordinates.
 
         For example: top leftmost location will be a pixel at (0, 0).
@@ -300,16 +300,17 @@ class MapMaskGenerator:
         x = int(self.pixels_per_meter * (loc.x - min_x))
         y = int(self.pixels_per_meter * (loc.y - min_y))
         
-        if self.rendering_window is not None:
-            # global rendering area coordinates
-            origin_x = self.pixels_per_meter * (self.rendering_window.origin.x - min_x)
-            origin_y = self.pixels_per_meter * (self.rendering_window.origin.y - min_y)
-            topleft_x = int(origin_x - self.rendering_window.area.width / 2)
-            topleft_y = int(origin_y - self.rendering_window.area.height / 2)
+        if not full:
+            if self.rendering_window is not None:
+                # global rendering area coordinates
+                origin_x = self.pixels_per_meter * (self.rendering_window.origin.x - min_x)
+                origin_y = self.pixels_per_meter * (self.rendering_window.origin.y - min_y)
+                topleft_x = int(origin_x - self.rendering_window.area.width / 2)
+                topleft_y = int(origin_y - self.rendering_window.area.height / 2)
 
-            # x, y becomes local coordinates within rendering window
-            x -= topleft_x
-            y -= topleft_y
+                # x, y becomes local coordinates within rendering window
+                x -= topleft_x
+                y -= topleft_y
 
         return Coord(x=int(x), y=int(y))
 
