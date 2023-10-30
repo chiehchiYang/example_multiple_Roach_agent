@@ -494,6 +494,25 @@ class World(object):
             carla.MapLayer.Walls,
             carla.MapLayer.All
         ]
+    def get_yaw(self, current_pos, previous_point):
+        yaw_vector = (current_pos - previous_point)
+
+        vector = [1, 0]
+
+        unit_vector_1 = yaw_vector / np.linalg.norm(yaw_vector)
+        unit_vector_2 = vector / np.linalg.norm(vector)
+        
+        
+        dot_product = np.dot(unit_vector_1, unit_vector_2)
+        
+        angle = np.arccos(dot_product)
+        import math
+        
+        if yaw_vector[1] < 0:
+            yaw = -math.degrees(angle)
+        else:
+            yaw = math.degrees(angle)
+        return yaw
 
     def restart(self):
         self.player_max_speed = 1.3 #1.589
@@ -539,13 +558,16 @@ class World(object):
                 sys.exit(1)
             spawn_points = self.map.get_spawn_points()
 
-            obstacle_route = np.load('route.npy')
+            obstacle_route = np.load('/media/hcis-s02/disk2/Map_Visualiser/route/Town10HD/route00.npy')
+            
             # print('Load' , obstacle_route)
             player_U_turn_spawn = carla.Transform(carla.Location(obstacle_route[0][0], obstacle_route[0][1]))
             player_U_turn_spawn.location.z += 2.0
             player_U_turn_spawn.rotation.roll = 0.0
             player_U_turn_spawn.rotation.pitch = 0.0
-            player_U_turn_spawn.rotation.yaw = 270.0
+            
+
+            player_U_turn_spawn.rotation.yaw = self.get_yaw(obstacle_route[1], obstacle_route[0])
             # spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
             spawn_point = player_U_turn_spawn
             self.player = self.world.try_spawn_actor(blueprint, spawn_point)
@@ -1863,7 +1885,7 @@ class BEV_MAP():
             tv_loc, stopline_wps, stopline_vtx, junction_paths = _get_traffic_light_waypoints( actor, world.world.get_map())
             # tv_loc
             # stopline_vtx
-
+            
             _id = actor.id
             traffic_id_list.append(_id)
             traffic_light_state = int(actor.state)  # traffic light state
@@ -2094,17 +2116,17 @@ class BEV_MAP():
         #### Delete reached points from current route ###
         #### If Frenet Frame is activated, augment reaching range because the agent may deviate from the original route to avoid obstacles #### 
         if len(obstacle_bbox_list) > 0:
-            while check_close(ego_loc, current_route[0], 5):
+            while check_close(ego_loc, current_route[0][0].transform.location, 5):
                 # print(world.player.get_location().distance(current_route[0]))
                 current_route.pop(0)
         else:
-            while check_close(ego_loc, current_route[0], 3):
+            while check_close(ego_loc, current_route[0][0].transform.location, 3):
                 # print(world.player.get_location().distance(current_route[0]))
                 current_route.pop(0)
             #### check if lost reached points ####
             set_check_range = 5
             if len(current_route) > set_check_range:
-                if check_close(ego_loc, current_route[set_check_range], 3):
+                if check_close(ego_loc, current_route[set_check_range][0].transform.location, 3):
                     for i in range(set_check_range):
                         current_route.pop(0)
 
@@ -2117,12 +2139,13 @@ class BEV_MAP():
 
         #### target: 20th waypoints of current route ####
         set_target = 20
+        
         if len(current_route) > set_target+1:
-            wx.append(current_route[set_target].x)
-            wy.append(current_route[set_target].y)     
+            wx.append(current_route[set_target][0].transform.location.x)
+            wy.append(current_route[set_target][0].transform.location.y)     
         else:       
-            wx.append(current_route[-1].x)
-            wy.append(current_route[-1].y)
+            wx.append(current_route[-1][0].transform.location.x)
+            wy.append(current_route[-1][0].transform.location.y)
 
         #### Frenet Frame obstacle inputs: real obstacle points + virtual obstacle points ####
         #### Obtain real obstacle points from obstacle_bbox_list ####
@@ -2178,7 +2201,7 @@ class BEV_MAP():
             render_route = current_route[0:40]
             route_list = []
             for i in range(len(render_route)):
-                loc = Loc(render_route[i].x, render_route[i].y)
+                loc = Loc(render_route[i][0].transform.location.x, render_route[i][0].transform.location.y)
                 route_list.append(loc)
 
 
@@ -2396,9 +2419,9 @@ def game_loop(args):
             
             
         
-        agent = BehaviorAgent(world.player, behavior='aggressive')
-        destination = random.choice(spawn_points).location
-        agent.set_destination(destination)
+        # agent = BehaviorAgent(world.player, behavior='aggressive')
+        # destination = random.choice(spawn_points).location
+        # agent.set_destination(destination)
 
 
         planner = GlobalRoutePlanner(map, resolution=1.0)
@@ -2412,15 +2435,23 @@ def game_loop(args):
         processed_policy = player_bev_map.init_policy()
         player_bev_map.init_vehicle_bbox(world.player.id)
         player_bev_map.init_spawn_points_and_planner(map.get_spawn_points(), planner)
-        # destination = random.choice(spawn_points).location
-        # current_route = planner.trace_route(world.player.get_location(), destination)
-        
+
+        obstacle_route = np.load('/media/hcis-s02/disk2/Map_Visualiser/route/Town10HD/route00.npy')
+        #destination = random.choice(spawn_points).location
+        destination = carla.Location(obstacle_route[1][0], obstacle_route[1][1])
+        np.delete(obstacle_route, [0,1])
+        current_route = planner.trace_route(world.player.get_location(), destination)
+        #print(current_route)
         #### load the route generated from Map_visualizer ###
-        obstacle_route = np.load('route.npy')
-        current_route = []
-        for point in obstacle_route:
-            loc = carla.Location(point[0], point[1])
-            current_route.append(loc)
+        #obstacle_route = np.load('/media/hcis-s02/disk2/Map_Visualiser/route/Town10HD/route00.npy')
+        
+        # current_route = []
+        # for point in obstacle_route:
+        #     loc = carla.Location(point[0], point[1])
+        #     current_route.append(loc)
+
+
+        #player_bev_map.init_spawn_points_and_planner(carla.Location(obstacle_route[0][0], obstacle_route[0][1]),planner)
 
         #### initialize a dict to store the information of other agents ####
         agent_bev_maps = {}
@@ -2459,36 +2490,43 @@ def game_loop(args):
             # start_time = time.time()
             # print("player_route")
 
-
-            # # regenerate a destination when the agent deviates from the current route
-            # if not check_close(world.player.get_location(), current_route[0][0].transform.location, 6):
-            #     destination = current_route[-1][0].transform.location
-            #     current_route = planner.trace_route(world.player.get_location(), destination)
             
-            # # Delete reached points from current route
-            # while check_close(world.player.get_location(), current_route[0][0].transform.location):
-            #     current_route.pop(0)
-            #     if len(current_route) == 0:
-            #         new_destination = random.choice(spawn_points).location
-            #         current_route = planner.trace_route(world.player.get_location(), new_destination)
+            
+            # regenerate a destination when the agent deviates from the current route
+            if not check_close(world.player.get_location(), current_route[0][0].transform.location, 6):
+                destination = current_route[-1][0].transform.location
+                current_route = planner.trace_route(world.player.get_location(), destination)
+            
+            # Delete reached points from current route
+            while check_close(world.player.get_location(), current_route[0][0].transform.location):
+                current_route.pop(0)
+                if len(current_route) == 0:
+                    #new_destination = random.choice(spawn_points).location
+                    new_destination = carla.Location(obstacle_route[0][0], obstacle_route[0][1])
+                    np.delete(obstacle_route, 0)
+                    current_route = planner.trace_route(world.player.get_location(), new_destination)
 
             
-            # # Generate new destination if the current one is close 
-            # if len(current_route) < 10:
-            #     new_destination = random.choice(spawn_points).location
-            #     new_route = planner.trace_route(current_route[-1][0].transform.location, new_destination)
-            #     temp_route = current_route + new_route
-            #     current_route = temp_route
+            # Generate new destination if the current one is close 
+            if len(current_route) < 10:
+                #new_destination = random.choice(spawn_points).location
+                new_destination = carla.Location(obstacle_route[0][0], obstacle_route[0][1])
+                np.delete(obstacle_route, 0)
+                new_route = planner.trace_route(current_route[-1][0].transform.location, new_destination)
+                temp_route = current_route + new_route
+                current_route = temp_route
 
 
-            # while check_close(world.player.get_location(), current_route[0]):
-            #     print(world.player.get_location().distance(current_route[0]))
-            #     current_route.pop(0)
-            #     if len(current_route) == 0:
-            #         new_destination = random.choice(spawn_points).location
-            #         current_route = planner.trace_route(world.player.get_location(), new_destination)
+            while check_close(world.player.get_location(), current_route[0][0].transform.location):
+                #print(world.player.get_location().distance(current_route[0][0]))
+                current_route.pop(0)
+                if len(current_route) == 0:
+                    #new_destination = random.choice(spawn_points).location
+                    new_destination = carla.Location(obstacle_route[0][0], obstacle_route[0][1])
+                    np.delete(obstacle_route, 0)
+                    current_route = planner.trace_route(world.player.get_location(), new_destination)
 
-            # route_trace = current_route[0:80]
+            route_trace = current_route[0:80]
 
 
             # collect data for all agents
