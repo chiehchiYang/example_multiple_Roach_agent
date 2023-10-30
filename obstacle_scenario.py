@@ -445,6 +445,7 @@ class World(object):
         settings.synchronous_mode = True  # Enables synchronous mode
         self.world.apply_settings(settings)
         self.actor_role_name = args.rolename
+        self.args = args
         try:
             self.map = self.world.get_map()
         except RuntimeError as error:
@@ -558,7 +559,7 @@ class World(object):
                 sys.exit(1)
             spawn_points = self.map.get_spawn_points()
 
-            obstacle_route = np.load('/media/hcis-s02/disk2/Map_Visualiser/route/Town10HD/route00.npy')
+            obstacle_route = np.load(f'./route/{self.args.town}/route00.npy')
             
             # print('Load' , obstacle_route)
             player_U_turn_spawn = carla.Transform(carla.Location(obstacle_route[0][0], obstacle_route[0][1]))
@@ -1594,84 +1595,11 @@ def get_actor_blueprints(world, filter, generation):
         print("   Warning! Actor Generation is not valid. No actor will be spawned.")
         return []
     
-def _get_traffic_light_waypoints(traffic_light, carla_map):
-    """
-    get area of a given traffic light
-    adapted from "carla-simulator/scenario_runner/srunner/scenariomanager/scenarioatomics/atomic_criteria.py"
-    """
-    base_transform = traffic_light.get_transform()
-    tv_loc = traffic_light.trigger_volume.location
-    tv_ext = traffic_light.trigger_volume.extent
-
-    # Discretize the trigger box into points
-    x_values = np.arange(-0.9 * tv_ext.x, 0.9 * tv_ext.x, 1.0)  # 0.9 to avoid crossing to adjacent lanes
-    area = []
-    for x in x_values:
-        point_location = base_transform.transform(tv_loc + carla.Location(x=x))
-        area.append(point_location)
-
-    # Get the waypoints of these points, removing duplicates
-    ini_wps = []
-    for pt in area:
-        wpx = carla_map.get_waypoint(pt)
-        # As x_values are arranged in order, only the last one has to be checked
-        if not ini_wps or ini_wps[-1].road_id != wpx.road_id or ini_wps[-1].lane_id != wpx.lane_id:
-            ini_wps.append(wpx)
-
-    # Leaderboard: Advance them until the intersection
-    stopline_wps = []
-    stopline_vertices = []
-    junction_wps = []
-    for wpx in ini_wps:
-        # Below: just use trigger volume, otherwise it's on the zebra lines.
-        # stopline_wps.append(wpx)
-        # vec_forward = wpx.transform.get_forward_vector()
-        # vec_right = carla.Vector3D(x=-vec_forward.y, y=vec_forward.x, z=0)
-
-        # loc_left = wpx.transform.location - 0.4 * wpx.lane_width * vec_right
-        # loc_right = wpx.transform.location + 0.4 * wpx.lane_width * vec_right
-        # stopline_vertices.append([loc_left, loc_right])
-
-        while not wpx.is_intersection:
-            next_wp = wpx.next(0.5)[0]
-            if next_wp and not next_wp.is_intersection:
-                wpx = next_wp
-            else:
-                break
-        junction_wps.append(wpx)
-
-        stopline_wps.append(wpx)
-        vec_forward = wpx.transform.get_forward_vector()
-        vec_right = carla.Vector3D(x=-vec_forward.y, y=vec_forward.x, z=0)
-
-        loc_left = wpx.transform.location - 0.4 * wpx.lane_width * vec_right
-        loc_right = wpx.transform.location + 0.4 * wpx.lane_width * vec_right
-        stopline_vertices.append([loc_left, loc_right])
-
-    # all paths at junction for this traffic light
-    junction_paths = []
-    path_wps = []
-    wp_queue = deque(junction_wps)
-    while len(wp_queue) > 0:
-        current_wp = wp_queue.pop()
-        path_wps.append(current_wp)
-        next_wps = current_wp.next(1.0)
-        for next_wp in next_wps:
-            if next_wp.is_junction:
-                wp_queue.append(next_wp)
-            else:
-                junction_paths.append(path_wps)
-                path_wps = []
-
-    return carla.Location(base_transform.transform(tv_loc)), stopline_wps, stopline_vertices, junction_paths
-
-    
-
 class BEV_MAP():
-    def __init__(self, args) -> None:
+    def __init__(self, args, world) -> None:
         
         self.args = args
-        
+        self.world = world
         
         self.data = None
         self.birdview_producer = BirdViewProducer(
@@ -1690,6 +1618,39 @@ class BEV_MAP():
         self.Y_bbox_1_16 = {}
         self.G_bbox_1_16 = {}
         self.R_bbox_1_16 = {}
+        
+        
+        # find traffic light id , and mapping ids to stop line index 
+        town = self.args.town
+        with open(f'./bird_eye_view/Stop_Line/{town}.json', 'r') as f:
+            stop_line_dict = json.load(f)
+        
+        traffic_light = {}
+            
+        lights = self.world.world.get_actors().filter("*traffic_light*")
+        for actor in lights:
+            
+            _id = actor.id
+            actor_loc = actor.get_location()
+            x = actor_loc.x
+            y = actor_loc.y
+            
+            for key in stop_line_dict.keys():
+                stop_line_loc = stop_line_dict[key]["loc"]
+                
+                if stop_line_loc[0] == -1 and stop_line_loc[1] == -1:
+                    continue
+                distance = math.sqrt((x-stop_line_loc[0])**2 + (y-stop_line_loc[1])**2)
+                if distance < 1:
+                    traffic_light[_id] = {}
+                    traffic_light[_id]["stop_line_A"] = stop_line_dict[key]["stop_line_A"]
+                    traffic_light[_id]["stop_line_B"] = stop_line_dict[key]["stop_line_B"]
+                    break
+                
+        self.traffic_light = traffic_light
+        
+        
+                
 
     def init_spawn_points_and_planner(self, spawn_points, planner):
         self.spawn_points = spawn_points
@@ -1875,32 +1836,26 @@ class BEV_MAP():
 
             data[_id]["cord_bounding_box"] = cord_bounding_box
             data[_id]["type"] = 'pedestrian'
-
-
-        
-        
+            
         traffic_id_list = []
         lights = world.world.get_actors().filter("*traffic_light*")
         for actor in lights:
-            tv_loc, stopline_wps, stopline_vtx, junction_paths = _get_traffic_light_waypoints( actor, world.world.get_map())
-            # tv_loc
-            # stopline_vtx
             
             _id = actor.id
+            stop_line_A = self.traffic_light[_id]["stop_line_A"]
+            stop_line_B = self.traffic_light[_id]["stop_line_B"]
+            
+            
             traffic_id_list.append(_id)
             traffic_light_state = int(actor.state)  # traffic light state
             cord_bounding_box = {}
-            cord_bounding_box["cord_0"] = [stopline_vtx[0][0].x, stopline_vtx[0][0].y, stopline_vtx[0][0].z]
-            cord_bounding_box["cord_1"] = [stopline_vtx[1][0].x, stopline_vtx[1][0].y, stopline_vtx[1][0].z]
-            cord_bounding_box["cord_2"] = [stopline_vtx[0][1].x, stopline_vtx[0][1].y, stopline_vtx[0][1].z]
-            cord_bounding_box["cord_3"] = [stopline_vtx[1][1].x, stopline_vtx[1][1].y, stopline_vtx[1][1].z]
+            cord_bounding_box["cord_0"] = [stop_line_A[0], stop_line_A[1]]
+            cord_bounding_box["cord_1"] = [stop_line_B[0], stop_line_B[1]]
 
             data[_id] = {}
             data[_id]["state"] = traffic_light_state
             data[_id]["cord_bounding_box"] = cord_bounding_box
 
-
-        
 
         obstacle_id_list = []
 
@@ -1976,28 +1931,23 @@ class BEV_MAP():
                 continue
             pos_0 = actor_dict[id]["cord_bounding_box"]["cord_0"]
             pos_1 = actor_dict[id]["cord_bounding_box"]["cord_1"]
-            pos_2 = actor_dict[id]["cord_bounding_box"]["cord_2"]
-            pos_3 = actor_dict[id]["cord_bounding_box"]["cord_3"]
 
-            
+
             if actor_dict[id]["state"] == 0 :
-                g_traffic_light_list.append([Loc(x=pos_0[0], y=pos_0[1]), 
+                g_traffic_light_list.append([
+                                        Loc(x=pos_0[0], y=pos_0[1]), 
                                         Loc(x=pos_1[0], y=pos_1[1]), 
-                                        Loc(x=pos_2[0], y=pos_2[1]), 
-                                        Loc(x=pos_3[0], y=pos_3[1]), 
                                         ])
             elif actor_dict[id]["state"] == 2:
-                g_traffic_light_list.append([Loc(x=pos_0[0], y=pos_0[1]), 
+                g_traffic_light_list.append([
+                                        Loc(x=pos_0[0], y=pos_0[1]), 
                                         Loc(x=pos_1[0], y=pos_1[1]), 
-                                        Loc(x=pos_2[0], y=pos_2[1]), 
-                                        Loc(x=pos_3[0], y=pos_3[1]), 
                                         ])  
             elif actor_dict[id]["state"] == 1:
-                g_traffic_light_list.append([Loc(x=pos_0[0], y=pos_0[1]), 
+                g_traffic_light_list.append([
+                                        Loc(x=pos_0[0], y=pos_0[1]), 
                                         Loc(x=pos_1[0], y=pos_1[1]), 
-                                        Loc(x=pos_2[0], y=pos_2[1]), 
-                                        Loc(x=pos_3[0], y=pos_3[1]), 
-                                        ])  
+                                        ]) 
             
 
 
@@ -2431,16 +2381,20 @@ def game_loop(args):
 
         #### initialize the ego player ####
         result = {}
-        player_bev_map = BEV_MAP(args)
+        player_bev_map = BEV_MAP(args, world)
         processed_policy = player_bev_map.init_policy()
         player_bev_map.init_vehicle_bbox(world.player.id)
         player_bev_map.init_spawn_points_and_planner(map.get_spawn_points(), planner)
 
-        obstacle_route = np.load('/media/hcis-s02/disk2/Map_Visualiser/route/Town10HD/route00.npy')
+
+        # obstacle_route = np.load('./route.npy')
+        obstacle_route = np.load(f'./route/{args.town}/route00.npy')
         #destination = random.choice(spawn_points).location
         destination = carla.Location(obstacle_route[1][0], obstacle_route[1][1])
         np.delete(obstacle_route, [0,1])
         current_route = planner.trace_route(world.player.get_location(), destination)
+        
+        
         #print(current_route)
         #### load the route generated from Map_visualizer ###
         #obstacle_route = np.load('/media/hcis-s02/disk2/Map_Visualiser/route/Town10HD/route00.npy')
@@ -2465,30 +2419,18 @@ def game_loop(args):
             agent_bev_maps[id] = agent_bev_map
             current_routes[id] = []
 
-
-        avg_FPS = 0  
-
-
         while True:
 
             clock.tick_busy_loop(20)
             frame = world.world.tick()
-            # print("++++start++++")
-            # start_time = time.time()
             if controller.parse_events(client, world, clock):
                 return
-
             view = pygame.surfarray.array3d(display)
             view = view.transpose([1, 0, 2]) 
             image = cv2.cvtColor(view, cv2.COLOR_RGB2BGR)
                         
 
             world.tick(clock, frame, image, stored_path)
-            avg_FPS = 0.98 * avg_FPS + 0.02 * clock.get_fps()
-            # print("Multithreading avg FPS:", avg_FPS)
-            # print(start_time - time.time())
-            # start_time = time.time()
-            # print("player_route")
 
             
             
@@ -2644,7 +2586,7 @@ def game_loop(args):
             # print("finish all",start_time_r - time.time())
             # print("finish routelist",start_time_r - time.time())
 
-            start_time_run = time.time()
+            # start_time_run = time.time()
             t_list = []
             results = [{} for i in range(actor_numbers)]
             for i in range(actor_numbers):

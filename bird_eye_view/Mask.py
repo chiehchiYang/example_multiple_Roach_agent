@@ -188,25 +188,14 @@ class MapMaskGenerator:
 
     def draw_line_mask(self, bbox_list) -> Mask:
         canvas = self.make_empty_mask()
-        # Carla corrin to pixel 
         
         for corners in bbox_list:
             corners = [self.location_to_pixel(loc) for loc in corners]
-            # cv2.fillPoly(img=canvas, pts=np.int32([corners]), color=COLOR_ON)
-
-
             points = (np.int32([corners]))
-            
-
+            # ex
             # [[[184 333]
             # [184 315]
-            # [184 319]
-            # [184 301]]]
-
-
-            # print(corners)
-            # [Coord(x=55, y=-21), Coord(x=55, y=-39), Coord(x=55, y=-35), Coord(x=55, y=-53)]
-            cv2.line(canvas, tuple( points[0][0] ), tuple( points[0][3] ), color=1, thickness=6)
+            cv2.line(canvas, tuple( points[0][0] ), tuple( points[0][1] ), color=1, thickness=6)
 
         return canvas   
         
@@ -216,18 +205,14 @@ class MapMaskGenerator:
         min_x = self._map_boundaries.min_x
         min_y = self._map_boundaries.min_y
         min_point = np.array([min_x, min_y])
-
         canvas = self.make_empty_mask()
-
         img_path = f"./bird_eye_view/maps/{self.Town}/crosswalk.png"
 
         if os.path.exists(img_path):
 
             
             crosswalk = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-
             crosswalk_np = self.image_2_waypoints(crosswalk)
-            
             crosswalk_pixel = np.rint(self.pixels_per_meter * (crosswalk_np - min_point))
             crosswalk_pixel = crosswalk_pixel.astype(int)[:,:2]
             canvas[crosswalk_pixel[:,1], crosswalk_pixel[:,0]] = COLOR_ON

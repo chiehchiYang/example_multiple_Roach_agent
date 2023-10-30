@@ -24,3 +24,10 @@ pip install matplotlib
 # cd PythonAPI/carla/dist
 pip install carla-0.9.14-cp37-cp37m-manylinux_2_27_x86_64.whl
 ```
+
+
+## Obstacle type 
+- traffic cone
+- street barrier
+- traffic warning
+- illegal parking
