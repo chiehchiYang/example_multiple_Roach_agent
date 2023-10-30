@@ -19,7 +19,7 @@ pip install h5py
 pip install hydra-core
 pip install wandb
 pip install pygame
-
+pip install matplotlib
 
 # cd PythonAPI/carla/dist
 pip install carla-0.9.14-cp37-cp37m-manylinux_2_27_x86_64.whl
