@@ -3,13 +3,10 @@ from typing import NamedTuple, List, Tuple, Optional
 import cv2 
 import os
 import ujson
-
 from bird_eye_view.Mask import PixelDimensions, square_fitting_rect_at_any_rotation, MapMaskGenerator, RenderingWindow, BirdViewMasks, Coord, Loc, COLOR_OFF, COLOR_ON
-import pygame
 
 RgbCanvas = np.ndarray  # [np.uint8] with shape (y, x, 3)
 BirdView = np.ndarray  # [np.uint8] with shape (level, y, x)
-
 
 class RGB:
     VIOLET = (173, 127, 168)
@@ -78,9 +75,7 @@ class RGB:
 RGB_BY_MASK = {
 
     BirdViewMasks.OBSTACLES: RGB.OBSTACLES,
-
     BirdViewMasks.AGENT: RGB.CHAMELEON,
-
     BirdViewMasks.Y_LIGHT_STOP_1: RGB.Y_LIGHT_STOP_1,    
     BirdViewMasks.Y_LIGHT_STOP_6: RGB.Y_LIGHT_STOP_6,    
     BirdViewMasks.Y_LIGHT_STOP_11: RGB.Y_LIGHT_STOP_11,    
@@ -309,148 +304,157 @@ class BirdViewProducer:
             agent_bbox_list
         )
 
-        if len(vehicle_bbox_1_16) < 16:
-            vehicle_bbox_list = vehicle_bbox_1_16[0]
-        else:
-            vehicle_bbox_list = vehicle_bbox_1_16[-16]
-        masks[BirdViewMasks.VEHICLES_16.value] = self.masks_generator.draw_bbox_mask(
-            vehicle_bbox_list
-        )
-        if len(vehicle_bbox_1_16) < 11:
-            vehicle_bbox_list = vehicle_bbox_1_16[0]
-        else:
-            vehicle_bbox_list = vehicle_bbox_1_16[-11]
-        masks[BirdViewMasks.VEHICLES_11.value] = self.masks_generator.draw_bbox_mask(
-            vehicle_bbox_list
-        )
-        if len(vehicle_bbox_1_16) < 6:
-            vehicle_bbox_list = vehicle_bbox_1_16[0]
-        else:
-            vehicle_bbox_list = vehicle_bbox_1_16[-6]
-        masks[BirdViewMasks.VEHICLES_6.value] = self.masks_generator.draw_bbox_mask(
-            vehicle_bbox_list
-        )
-        vehicle_bbox_list = vehicle_bbox_1_16[-1]
-        masks[BirdViewMasks.VEHICLES_1.value] = self.masks_generator.draw_bbox_mask(
-            vehicle_bbox_list
-        )
+        if len(vehicle_bbox_1_16) != 0:
+            if len(vehicle_bbox_1_16) < 16:
+                vehicle_bbox_list = vehicle_bbox_1_16[0]
+            else:
+                vehicle_bbox_list = vehicle_bbox_1_16[-16]
+            masks[BirdViewMasks.VEHICLES_16.value] = self.masks_generator.draw_bbox_mask(
+                vehicle_bbox_list
+            )
+            if len(vehicle_bbox_1_16) < 11:
+                vehicle_bbox_list = vehicle_bbox_1_16[0]
+            else:
+                vehicle_bbox_list = vehicle_bbox_1_16[-11]
+            masks[BirdViewMasks.VEHICLES_11.value] = self.masks_generator.draw_bbox_mask(
+                vehicle_bbox_list
+            )
+            if len(vehicle_bbox_1_16) < 6:
+                vehicle_bbox_list = vehicle_bbox_1_16[0]
+            else:
+                vehicle_bbox_list = vehicle_bbox_1_16[-6]
+            masks[BirdViewMasks.VEHICLES_6.value] = self.masks_generator.draw_bbox_mask(
+                vehicle_bbox_list
+            )
+            vehicle_bbox_list = vehicle_bbox_1_16[-1]
+            masks[BirdViewMasks.VEHICLES_1.value] = self.masks_generator.draw_bbox_mask(
+                vehicle_bbox_list
+            )
 
 
         # ped 
-        if len(pedestrain_bbox_1_16) < 16:
-            pedestrians_bbox_list = pedestrain_bbox_1_16[0]
-        else:
-            pedestrians_bbox_list = pedestrain_bbox_1_16[-16]
-        masks[BirdViewMasks.PEDESTRIANS_16.value] = self.masks_generator.draw_bbox_mask(
-            pedestrians_bbox_list
-        )
-        if len(pedestrain_bbox_1_16) < 11:
-            pedestrians_bbox_list = pedestrain_bbox_1_16[0]
-        else:
-            pedestrians_bbox_list = pedestrain_bbox_1_16[-11]
-        masks[BirdViewMasks.PEDESTRIANS_11.value] = self.masks_generator.draw_bbox_mask(
-            pedestrians_bbox_list
-        )
-        if len(pedestrain_bbox_1_16) < 6:
-            pedestrians_bbox_list = pedestrain_bbox_1_16[0]
-        else:
-            pedestrians_bbox_list = pedestrain_bbox_1_16[-6]
-        masks[BirdViewMasks.PEDESTRIANS_6.value] = self.masks_generator.draw_bbox_mask(
-            pedestrians_bbox_list
-        )
-        pedestrians_bbox_list = pedestrain_bbox_1_16[-1]
-        masks[BirdViewMasks.PEDESTRIANS_1.value] = self.masks_generator.draw_bbox_mask(
-            pedestrians_bbox_list
-        )
+        
+        if len(pedestrain_bbox_1_16) !=0:
+        
+            if len(pedestrain_bbox_1_16) < 16:
+                pedestrians_bbox_list = pedestrain_bbox_1_16[0]
+            else:
+                pedestrians_bbox_list = pedestrain_bbox_1_16[-16]
+            masks[BirdViewMasks.PEDESTRIANS_16.value] = self.masks_generator.draw_bbox_mask(
+                pedestrians_bbox_list
+            )
+            if len(pedestrain_bbox_1_16) < 11:
+                pedestrians_bbox_list = pedestrain_bbox_1_16[0]
+            else:
+                pedestrians_bbox_list = pedestrain_bbox_1_16[-11]
+            masks[BirdViewMasks.PEDESTRIANS_11.value] = self.masks_generator.draw_bbox_mask(
+                pedestrians_bbox_list
+            )
+            if len(pedestrain_bbox_1_16) < 6:
+                pedestrians_bbox_list = pedestrain_bbox_1_16[0]
+            else:
+                pedestrians_bbox_list = pedestrain_bbox_1_16[-6]
+            masks[BirdViewMasks.PEDESTRIANS_6.value] = self.masks_generator.draw_bbox_mask(
+                pedestrians_bbox_list
+            )
+            pedestrians_bbox_list = pedestrain_bbox_1_16[-1]
+            masks[BirdViewMasks.PEDESTRIANS_1.value] = self.masks_generator.draw_bbox_mask(
+                pedestrians_bbox_list
+            )
 
         # ToDos: Add stop sign 
 
         # r_bbox_1_16, g_bbox_1_16, y_bbox_1_16,
         # ped 
-        if len(r_bbox_1_16) < 16:
-            r_bbox = r_bbox_1_16[0]
-        else:
-            r_bbox = r_bbox_1_16[-16]
-        masks[BirdViewMasks.R_LIGHT_STOP_16.value] = self.masks_generator.draw_line_mask(
-            r_bbox
-        )
-        if len(r_bbox_1_16) < 11:
-            r_bbox = r_bbox_1_16[0]
-        else:
-            r_bbox = r_bbox_1_16[-11]
-        masks[BirdViewMasks.R_LIGHT_STOP_11.value] = self.masks_generator.draw_line_mask(
-            r_bbox
-        )
-        if len(r_bbox_1_16) < 6:
-            r_bbox = r_bbox_1_16[0]
-        else:
-            r_bbox = r_bbox_1_16[-6]
-        masks[BirdViewMasks.R_LIGHT_STOP_6.value] = self.masks_generator.draw_line_mask(
-            r_bbox
-        )
-        r_bbox = r_bbox_1_16[-1]
-        masks[BirdViewMasks.R_LIGHT_STOP_1.value] = self.masks_generator.draw_line_mask(
-            r_bbox
-        )
+        if len(r_bbox_1_16) != 0:
+            if len(r_bbox_1_16) < 16:
+                r_bbox = r_bbox_1_16[0]
+            else:
+                r_bbox = r_bbox_1_16[-16]
+            masks[BirdViewMasks.R_LIGHT_STOP_16.value] = self.masks_generator.draw_line_mask(
+                r_bbox
+            )
+            if len(r_bbox_1_16) < 11:
+                r_bbox = r_bbox_1_16[0]
+            else:
+                r_bbox = r_bbox_1_16[-11]
+            masks[BirdViewMasks.R_LIGHT_STOP_11.value] = self.masks_generator.draw_line_mask(
+                r_bbox
+            )
+            if len(r_bbox_1_16) < 6:
+                r_bbox = r_bbox_1_16[0]
+            else:
+                r_bbox = r_bbox_1_16[-6]
+            masks[BirdViewMasks.R_LIGHT_STOP_6.value] = self.masks_generator.draw_line_mask(
+                r_bbox
+            )
+            r_bbox = r_bbox_1_16[-1]
+            masks[BirdViewMasks.R_LIGHT_STOP_1.value] = self.masks_generator.draw_line_mask(
+                r_bbox
+            )
 
-        if len(g_bbox_1_16) < 16:
-            g_bbox = g_bbox_1_16[0]
-        else:
-            g_bbox = g_bbox_1_16[-16]
-        masks[BirdViewMasks.G_LIGHT_STOP_16.value] = self.masks_generator.draw_line_mask(
-            g_bbox
-        )
-        if len(g_bbox_1_16) < 11:
-            g_bbox = g_bbox_1_16[0]
-        else:
-            g_bbox = g_bbox_1_16[-11]
-        masks[BirdViewMasks.G_LIGHT_STOP_11.value] = self.masks_generator.draw_line_mask(
-            g_bbox
-        )
-        if len(g_bbox_1_16) < 6:
-            g_bbox = g_bbox_1_16[0]
-        else:
-            g_bbox = g_bbox_1_16[-6]
-        masks[BirdViewMasks.G_LIGHT_STOP_6.value] = self.masks_generator.draw_line_mask(
-            g_bbox
-        )
-        g_bbox = g_bbox_1_16[-1]
-        masks[BirdViewMasks.G_LIGHT_STOP_1.value] = self.masks_generator.draw_line_mask(
-            g_bbox
-        )
+        if len(g_bbox_1_16)!= 0:
+            if len(g_bbox_1_16) < 16:
+                g_bbox = g_bbox_1_16[0]
+            else:
+                g_bbox = g_bbox_1_16[-16]
+            masks[BirdViewMasks.G_LIGHT_STOP_16.value] = self.masks_generator.draw_line_mask(
+                g_bbox
+            )
+            if len(g_bbox_1_16) < 11:
+                g_bbox = g_bbox_1_16[0]
+            else:
+                g_bbox = g_bbox_1_16[-11]
+            masks[BirdViewMasks.G_LIGHT_STOP_11.value] = self.masks_generator.draw_line_mask(
+                g_bbox
+            )
+            if len(g_bbox_1_16) < 6:
+                g_bbox = g_bbox_1_16[0]
+            else:
+                g_bbox = g_bbox_1_16[-6]
+            masks[BirdViewMasks.G_LIGHT_STOP_6.value] = self.masks_generator.draw_line_mask(
+                g_bbox
+            )
+            g_bbox = g_bbox_1_16[-1]
+            masks[BirdViewMasks.G_LIGHT_STOP_1.value] = self.masks_generator.draw_line_mask(
+                g_bbox
+            )
 
-        if len(y_bbox_1_16) < 16:
-            y_bbox = y_bbox_1_16[0]
-        else:
-            y_bbox = y_bbox_1_16[-16]
-        masks[BirdViewMasks.Y_LIGHT_STOP_16.value] = self.masks_generator.draw_line_mask(
-            y_bbox
-        )
-        if len(y_bbox_1_16) < 11:
-            y_bbox = y_bbox_1_16[0]
-        else:
-            y_bbox = y_bbox_1_16[-11]
-        masks[BirdViewMasks.Y_LIGHT_STOP_11.value] = self.masks_generator.draw_line_mask(
-            y_bbox
-        )
-        if len(y_bbox_1_16) < 6:
-            y_bbox = y_bbox_1_16[0]
-        else:
-            y_bbox = y_bbox_1_16[-6]
-        masks[BirdViewMasks.Y_LIGHT_STOP_6.value] = self.masks_generator.draw_line_mask(
-            y_bbox
-        )
-        y_bbox = y_bbox_1_16[-1]
-        masks[BirdViewMasks.Y_LIGHT_STOP_1.value] = self.masks_generator.draw_line_mask(
-            y_bbox
-        )
+        if len(y_bbox_1_16)!= 0:
+            if len(y_bbox_1_16) < 16:
+                y_bbox = y_bbox_1_16[0]
+            else:
+                y_bbox = y_bbox_1_16[-16]
+            masks[BirdViewMasks.Y_LIGHT_STOP_16.value] = self.masks_generator.draw_line_mask(
+                y_bbox
+            )
+            if len(y_bbox_1_16) < 11:
+                y_bbox = y_bbox_1_16[0]
+            else:
+                y_bbox = y_bbox_1_16[-11]
+            masks[BirdViewMasks.Y_LIGHT_STOP_11.value] = self.masks_generator.draw_line_mask(
+                y_bbox
+            )
+            if len(y_bbox_1_16) < 6:
+                y_bbox = y_bbox_1_16[0]
+            else:
+                y_bbox = y_bbox_1_16[-6]
+            masks[BirdViewMasks.Y_LIGHT_STOP_6.value] = self.masks_generator.draw_line_mask(
+                y_bbox
+            )
+            y_bbox = y_bbox_1_16[-1]
+            masks[BirdViewMasks.Y_LIGHT_STOP_1.value] = self.masks_generator.draw_line_mask(
+                y_bbox
+            )
         # masks[BirdViewMasks.PEDESTRIANS.value] = self.masks_generator.draw_bbox_mask(
         #     pedestrians_bbox_list
         # )
         # print(obstacle_bbox_list)
-        masks[BirdViewMasks.OBSTACLES.value] = self.masks_generator.draw_bbox_mask(
-            obstacle_bbox_list
-        )
+        
+        if (len(obstacle_bbox_list)!=0):
+            masks[BirdViewMasks.OBSTACLES.value] = self.masks_generator.draw_bbox_mask(
+                obstacle_bbox_list
+            )
         
         
         return masks
@@ -460,8 +464,18 @@ class BirdViewProducer:
         _, h, w = birdview.shape
         rgb_canvas = np.zeros(shape=(h, w, 3), dtype=np.uint8)
         nonzero_indices = lambda arr: arr == COLOR_ON
+        
 
         for mask_type in BirdViewMasks.bottom_to_top():
+            
+            
+            # print(mask_type)
+            
+            # if mask_type == BirdViewMasks.ROUTE:
+            #     continue
+            
+
+            
             rgb_color = RGB_BY_MASK[mask_type]
             # print(rgb_color)
             mask = birdview[mask_type]
@@ -605,7 +619,7 @@ if __name__ == "__main__":
     for name in measurement_list:
         # print(name)
         # 0000.json.gz
-        frame = name.split(".")[0]
+        frame = name.split(".")[2]
         # print(frame)
         
         with open(f"{folder_path}/ego_data/{name}", 'rt') as f1:

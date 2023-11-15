@@ -28,6 +28,15 @@ pip install carla-0.9.14-cp37-cp37m-manylinux_2_27_x86_64.whl
 
 ## Obstacle type 
 - traffic cone
-- street barrier
+    - static.prop.trafficcone01 
+    - static.prop.trafficcone02
+- street barrier 
+    - static.prop.streetbarrier
 - traffic warning
+    - static.prop.trafficwarning
 - illegal parking
+
+# obstacle scenario list 
+
+# location 
+# 
