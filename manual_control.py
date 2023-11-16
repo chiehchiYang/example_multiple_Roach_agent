@@ -1395,7 +1395,18 @@ def _get_traffic_light_waypoints(traffic_light, carla_map):
 
     return carla.Location(base_transform.transform(tv_loc)), stopline_wps, stopline_vertices, junction_paths
 
-    
+#######  [0]: address, [1]: the step with the highest reward
+fixed_speed_roach_wandb_address = {
+    10: ["sonicokuo/fixed_maximum_speed_10/2life6yg", 5419008],
+    21.6: ["sonicokuo/cata_train_rl_FixSeed/o6gx5mka", 5419008],
+    30: ["sonicokuo/fixed_maximum_speed_30/1oh4n7eu", 5971968]
+}
+
+speed_throttle_clip = {
+    10: {'high':0.39, 'low':0.38},
+    21.6: {'high':0.48, 'low':0.47},
+    30: {'high':0.52, 'low':0.51}
+}
 
 class BEV_MAP():
     def __init__(self, args) -> None:
@@ -1422,40 +1433,45 @@ class BEV_MAP():
         self.G_bbox_1_16 = {}
         self.R_bbox_1_16 = {}
 
-    def init_policy(self, policy = None):    # prepare policy
+    def init_policy(self):    # prepare policy
         # inti roach model 
-        wandb_path = "sonicokuo/cata_train_rl_FixSeed/o6gx5mka"
-        if wandb_path[-1] == '\n':
-               wandb_path = wandb_path[:-1]
-        api = wandb.Api()
-        run = api.run(wandb_path)
-        all_ckpts = [f for f in run.files() if 'ckpt' in f.name] #load a check points
-        f = max(all_ckpts, key=lambda x: int(x.name.split('_')[1].split('.')[0]))
-        print(f'Resume checkpoint latest {f.name}')
-        f.download(replace=True)
-        run.file('config_agent.yaml').download(replace=True)
-        cfg = OmegaConf.load('config_agent.yaml')
-        cfg = OmegaConf.to_container(cfg)
-        self._ckpt = f.name
+        # wandb_path = "sonicokuo/cata_train_rl_FixSeed/o6gx5mka"
 
-        ckpt = f.name
+        ###### load multiple models with different maximum speeds#######f
+        speed_list = [10, 21.6, 30]
+        policies = {}
+        for speed in speed_list:
+            wandb_path = fixed_speed_roach_wandb_address[speed][0]
+            if wandb_path[-1] == '\n':
+                wandb_path = wandb_path[:-1]
+            api = wandb.Api()
+            run = api.run(wandb_path)
+            all_ckpts = [f for f in run.files() if 'ckpt' in f.name] #load all checkpoints in the assgined address
+            ######choose the checkpoint based on assigend steps, if there are no checkpoints found, choose the highest step ######
+            f = max(all_ckpts, key=lambda x: int(x.name.split('_')[1].split('.')[0]))
+            for ckpt in all_ckpts:
+                if fixed_speed_roach_wandb_address[speed][1] == int(ckpt.name.split('_')[1].split('.')[0]):
+                    f = ckpt
+                    break
+            print(f'Resume checkpoint {f.name}')
+            f.download(replace=True)
+            run.file('config_agent.yaml').download(replace=True)
+            cfg = OmegaConf.load('config_agent.yaml')
+            cfg = OmegaConf.to_container(cfg)
+            ckpt = f.name
+            policy_class = load_entry_point(cfg['policy']['entry_point'])
+            print(f'Loading wandb checkpoint: {ckpt}')
+            policy, _ = policy_class.load(ckpt)
+            policy = policy.eval()
+            policies[speed] = policy
+        
+        
+        self.policies = policies
 
-        train_cfg = cfg['training'] 
-
-        policy_class = load_entry_point(cfg['policy']['entry_point'])
-        policy_kwargs = cfg['policy']['kwargs']
-        print(f'Loading wandb checkpoint: {ckpt}')
-        policy, train_cfg['kwargs'] = policy_class.load(ckpt)
-        policy = policy.eval()
-
-        self._wrapper_class = load_entry_point(cfg['env_wrapper']['entry_point'])
-        self._wrapper_kwargs = cfg['env_wrapper']['kwargs']
-        self.policy = policy
-
-        return policy
+        return policies
     def set_policy(self, processed_policy):
-        policy = copy.deepcopy(processed_policy)
-        self.policy = policy
+        policies = copy.deepcopy(processed_policy)
+        self.policies = policies
 
     def init_vehicle_bbox(self, ego_id):
         self.vehicle_bbox_1_16[ego_id] = []
@@ -1662,7 +1678,7 @@ class BEV_MAP():
     def set_data(self, proccessed_data):
         self.data = proccessed_data
 
-    def run_step(self, result, frame, ego_id, route_list = None):
+    def run_step(self, result, frame, ego_id, route_list = None, speed_control = 10):
         start_time = time.time()
         actor_dict =  copy.deepcopy(self.data)
 
@@ -1866,16 +1882,20 @@ class BEV_MAP():
         result["policy_input"] = policy_input
         # return topdown[0:192, 56:248], policy_input
         # return new_array, policy_input
-        self.policy_forward(result, [policy_input])
+        self.policy_forward(result, [policy_input], speed_control)
         # print("finish one both", ego_id ,start_time - time.time(), frame - time.time())
         
-    def policy_forward(self, result, policy_inputs_list):    
+    def policy_forward(self, result, policy_inputs_list, speed_control = 10):    
         control_elements_list = []
         for policy_input in policy_inputs_list:
-            actions, values, log_probs, mu, sigma, features = self.policy.forward(
+            actions, values, log_probs, mu, sigma, features = self.policies[speed_control].forward(
                 policy_input, deterministic=True, clip_action=True)
                      
-            # print(actions)
+            v_x = policy_input['state'][0][4]
+            v_y = policy_input['state'][0][5]
+            v = math.sqrt(v_x**2 + v_y**2)
+            ######### the models are trained in 0.9.10, so there would be rush problems in other versions#######
+            ######### Add speed_throttle_clip for models in different speeds to avoid rush problems########
             for action in actions:
                 acc, steer = action.astype(np.float64)
                 if acc >= 0.0:
@@ -1884,8 +1904,10 @@ class BEV_MAP():
                 else:
                     throttle = 0.0
                     brake = np.abs(acc)
-
-                throttle = np.clip(throttle, 0, 0.5)
+                if v > speed_control/3.6:
+                    throttle = np.clip(throttle, 0, speed_throttle_clip[speed_control]['low'])
+                else:
+                    throttle = np.clip(throttle, 0, speed_throttle_clip[speed_control]['high'])
                 steer = np.clip(steer, -1, 1)
                 brake = np.clip(brake, 0, 1)
                 control_elements = {}
@@ -1903,24 +1925,21 @@ class BEV_MAP():
 # ==============================================================================
 
 def check_close(ev_loc, loc0, distance = 3):
-    # ev_location = self.vehicle.get_location()
-    # closest_idx = 0
-
-    # for i in range(len(self._global_route)-1):
-    #     if i > windows_size:
-    #         break
-
-    #     loc0 = self._global_route[i][0].transform.location
-    #     loc1 = self._global_route[i+1][0].transform.location
 
     if ev_loc.distance(loc0) < distance:
         return True
+    
+    return False
 
 
 def game_loop(args):
     pygame.init()
     pygame.font.init()
     world = None
+
+    ############## initialize a speed_control for all agents##################
+    ############## Modify codes related to roach_speed_control if you want to assign different speeds for different agents##################
+    roach_speed_control = 10
 
     #try:
     if True:
@@ -2089,30 +2108,27 @@ def game_loop(args):
             start_time = time.time()
             # print("player_runstep")
             result = {}
-            # player_bev_map.run_step(result, frame, world.player.id, route_list)
-            # bev_map_rgb = result["bev_map_rgb"]
-            # # policy_input = result["policy_input"]
-            # # print(start_time - time.time())
-            # # start_time = time.time()
-            # # print("player_forward")            
-            # # player_bev_map.policy_forward(result, [policy_input])
-            # control_elements_list = result["control_elements_list"]
-            # print("player_all", start_time - time.time())
-            # # start_time = time.time()
-            # # print("player_render")
+            player_bev_map.run_step(result, frame, world.player.id, route_list, speed_control=roach_speed_control)
+            bev_map_rgb = result["bev_map_rgb"]
+            # policy_input = result["policy_input"]
+            # print(start_time - time.time())
+            # start_time = time.time()
+            # print("player_forward")            
+            # player_bev_map.policy_forward(result, [policy_input])
+            control_elements_list = result["control_elements_list"]
 
-            # # for render
-            # surface = pygame.surfarray.make_surface(bev_map_rgb)
-            # surface = pygame.transform.flip(surface, True, False)
-            # surface = pygame.transform.rotate(surface, 90)
-            # display.blit(surface, (256, 0))
-            # # print(start_time - time.time())
-            # # start_time = time.time()
-            # # print("player_control")
-            # control_elements = control_elements_list[0]
-            # control = carla.VehicleControl(throttle=control_elements['throttle'], steer=control_elements['steer'], brake=control_elements['brake'])
+            # for render
+            surface = pygame.surfarray.make_surface(bev_map_rgb)
+            surface = pygame.transform.flip(surface, True, False)
+            surface = pygame.transform.rotate(surface, 90)
+            display.blit(surface, (256, 0))
+            # print(start_time - time.time())
+            # start_time = time.time()
+            # print("player_control")
+            control_elements = control_elements_list[0]
+            control = carla.VehicleControl(throttle=control_elements['throttle'], steer=control_elements['steer'], brake=control_elements['brake'])
         
-            # world.player.apply_control( control )
+            world.player.apply_control( control )
             ###################player control#####################
 
             # print(start_time - time.time())
@@ -2188,7 +2204,7 @@ def game_loop(args):
             results = [{} for i in range(actor_numbers)]
             for i in range(actor_numbers):
                 input = [results[i]]
-                input = input + inputs[i]
+                input = input + inputs[i] + [roach_speed_control] #speed_control
                 agent_bev_maps[vehicles_list[i]].set_data(processed_data)
                 t = Thread(target=agent_bev_maps[vehicles_list[i]].run_step, args=tuple(input))
                 t_list.append(t)
@@ -2212,14 +2228,14 @@ def game_loop(args):
             #     t.join()
             # print("finish infer",start_time - time.time())
 
-            for i in range(4):
-                bev_map_rgb = results[i]["bev_map_rgb"]
-                surface = pygame.surfarray.make_surface(bev_map_rgb)
-                surface = pygame.transform.flip(surface, True, False)
-                surface = pygame.transform.rotate(surface, 90)
-                display.blit(surface, (256, 210*i))  
+            if actor_numbers>0:
+                for i in range(min(3 , actor_numbers)):
+                    bev_map_rgb = results[i]["bev_map_rgb"]
+                    surface = pygame.surfarray.make_surface(bev_map_rgb)
+                    surface = pygame.transform.flip(surface, True, False)
+                    surface = pygame.transform.rotate(surface, 90)
+                    display.blit(surface, (256, 210*i + 210))  
 
-            start_time = time.time()
             for i in range(actor_numbers):
                 control_elements_list = results[i]["control_elements_list"] 
                 control_elements = control_elements_list[0]
