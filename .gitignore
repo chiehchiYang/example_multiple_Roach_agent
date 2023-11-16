@@ -1,1 +1,5 @@
-auto_random_actors.cpython-37.pyc
+.gitignore
+*.pyc
+*dataset/
+*ckpt/
+*config_agent.yaml
