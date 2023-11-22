@@ -100,6 +100,7 @@ import copy
 from omegaconf import OmegaConf
 from importlib import import_module
 import wandb
+import collections
 
 def load_entry_point(name):
     mod_name, attr_name = name.split(":") #agents.rl_birdview.rl_birdview_agent:RlBirdviewAgent
@@ -186,7 +187,7 @@ def get_actor_display_name(actor, truncate=250):
 
 
 class World(object):
-    def __init__(self, carla_world, hud, args):
+    def __init__(self, carla_world, hud, args, ego_transform):
         self.world = carla_world
         settings = self.world.get_settings()
         settings.fixed_delta_seconds = 0.05
@@ -211,7 +212,12 @@ class World(object):
         self._weather_index = 0
         self._actor_filter = args.filter
         self._gamma = args.gamma
-        self.restart()
+        
+        self.collision_sensor = None
+        
+        
+        # set ego position 
+        self.restart(ego_transform)
         self.world.on_tick(hud.on_world_tick)
         self.recording_enabled = False
         self.recording_start = 0
@@ -250,7 +256,7 @@ class World(object):
             yaw = math.degrees(angle)
         return yaw
 
-    def restart(self):
+    def restart(self, ego_transform ):
         self.player_max_speed = 1.3 #1.589
         self.player_max_speed_fast = 3.713
         # Keep same camera config if the camera manager exists.
@@ -279,33 +285,37 @@ class World(object):
 
 
        # Spawn the player.
-        if self.player is not None:
-            spawn_point = self.player.get_transform()
-            spawn_point.location.z += 2.0
-            spawn_point.rotation.roll = 0.0
-            spawn_point.rotation.pitch = 0.0
-            self.destroy()
-            self.player = self.world.try_spawn_actor(blueprint, spawn_point)
-            self.show_vehicle_telemetry = False
-            self.modify_vehicle_physics(self.player)
+        # if self.player is not None:
+            # spawn_point = self.player.get_transform()
+            # spawn_point.location.z += 2.0
+            # spawn_point.rotation.roll = 0.0
+            # spawn_point.rotation.pitch = 0.0
+            # self.destroy()
+        self.player = self.world.try_spawn_actor(blueprint, ego_transform) # spawn_point)
+        
+        
+        print(self.player)
+        self.show_vehicle_telemetry = False
+        self.modify_vehicle_physics(self.player)            
+        # while self.player is None:
+        #     if not self.map.get_spawn_points():
+        #         print('There are no spawn points available in your map/town.')
+        #         print('Please add some Vehicle Spawn Point to your UE4 scene.')
+        #         sys.exit(1)
+
+        #     # random spawn points 
+        #     spawn_points = self.map.get_spawn_points()
+        #     spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
+        #     self.player = self.world.try_spawn_actor(blueprint, spawn_point)
             
-        while self.player is None:
-            if not self.map.get_spawn_points():
-                print('There are no spawn points available in your map/town.')
-                print('Please add some Vehicle Spawn Point to your UE4 scene.')
-                sys.exit(1)
+        #     self.show_vehicle_telemetry = False
+        #     self.modify_vehicle_physics(self.player)
             
-            
-            # random spawn points 
-            spawn_points = self.map.get_spawn_points()
-            spawn_point = random.choice(spawn_points) if spawn_points else carla.Transform()
-            self.player = self.world.try_spawn_actor(blueprint, spawn_point)
-            
-            self.show_vehicle_telemetry = False
-            self.modify_vehicle_physics(self.player)
         # Set up the sensors.
         self.gnss_sensor = GnssSensor(self.player)
         self.imu_sensor = IMUSensor(self.player)
+        
+        self.collision_sensor = CollisionSensor(self.player, self.hud)
         
         actor_type = get_actor_display_name(self.player)
         self.hud.notification(actor_type)
@@ -373,13 +383,55 @@ class World(object):
         #     self.toggle_radar()
         sensors = [
             self.gnss_sensor.sensor,
-            self.imu_sensor.sensor]
+            self.imu_sensor.sensor,
+            self.collision_sensor.sensor
+            
+            ]
         for sensor in sensors:
             if sensor is not None:
                 sensor.stop()
                 sensor.destroy()
         if self.player is not None:
             self.player.destroy()
+
+# ==============================================================================
+# -- CollisionSensor -----------------------------------------------------------
+# ==============================================================================
+
+
+class CollisionSensor(object):
+    def __init__(self, parent_actor, hud):
+        self.sensor = None
+        self.history = []
+        self._parent = parent_actor
+        self.hud = hud
+        world = self._parent.get_world()
+        bp = world.get_blueprint_library().find('sensor.other.collision')
+        self.sensor = world.spawn_actor(bp, carla.Transform(), attach_to=self._parent)
+        # We need to pass the lambda a weak reference to self to avoid circular
+        # reference.
+        weak_self = weakref.ref(self)
+        self.sensor.listen(lambda event: CollisionSensor._on_collision(weak_self, event))
+
+    def get_collision_history(self):
+        history = collections.defaultdict(int)
+        for frame, intensity in self.history:
+            history[frame] += intensity
+        return history
+
+    @staticmethod
+    def _on_collision(weak_self, event):
+        self = weak_self()
+        if not self:
+            return
+        actor_type = get_actor_display_name(event.other_actor)
+        self.hud.notification('Collision with %r' % actor_type)
+        impulse = event.normal_impulse
+        intensity = math.sqrt(impulse.x**2 + impulse.y**2 + impulse.z**2)
+        self.history.append((event.frame, intensity))
+        if len(self.history) > 4000:
+            self.history.pop(0)
+        print("collision ")
 
 
 # ==============================================================================
@@ -416,12 +468,13 @@ class KeyboardControl(object):
                 if self._is_quit_shortcut(event.key):
                     return True
                 elif event.key == K_BACKSPACE:
-                    if self._autopilot_enabled:
-                        world.player.set_autopilot(False)
-                        world.restart()
-                        world.player.set_autopilot(True)
-                    else:
-                        world.restart()
+                    pass
+                    # if self._autopilot_enabled:
+                    #     world.player.set_autopilot(False)
+                    #     world.restart()
+                    #     world.player.set_autopilot(True)
+                    # else:
+                    #     world.restart()
                 elif event.key == K_F1:
                     world.hud.toggle_info()
                 elif event.key == K_v and pygame.key.get_mods() & KMOD_SHIFT:
@@ -1332,6 +1385,11 @@ class BEV_MAP():
         self.obstacle_target_point = Loc(x=-1, y=-1)
         self.destination = None
         self.obstacle_route_list = []
+        
+        
+    # For data collection     
+    def set_end_point(self, end_point):
+        self.end_point = end_point
     
     def set_destination(self, destination):
         self.destination = destination
@@ -1647,9 +1705,9 @@ class BEV_MAP():
     def set_data(self, proccessed_data):
         self.data = proccessed_data
 
-    def run_step(self, result, frame, ego_id, current_route = None):
+    def run_step(self, result, ego_id, current_route = None):
         
-        result["update_route"] = False
+        # result["update_route"] = False
 
         actor_dict = copy.deepcopy(self.data)
         
@@ -1724,7 +1782,8 @@ class BEV_MAP():
                 # check if vehicle is obstacle 
                 continue
             
-            traffic_light_loc = Loc(x=actor_dict[id]['location']['x'], y=actor_dict[id]['location']['y']) # carla.Location(x=actor_dict[id]['location']['x'], y=actor_dict[id]['location']['y'])
+            traffic_light_loc = Loc(x=actor_dict[id]['location']['x'], y=actor_dict[id]['location']['y']) 
+            # carla.Location(x=actor_dict[id]['location']['x'], y=actor_dict[id]['location']['y'])
             if not check_close(ego_pos, traffic_light_loc, 36): #35.95m
                 continue
             pos_0 = actor_dict[id]["cord_bounding_box"]["cord_0"]
@@ -1790,47 +1849,47 @@ class BEV_MAP():
 
         route_list = current_route[:100]
         
-        ####### check if obsacle exist 
+        # ####### check if obsacle exist 
         
-        if not self.obstacle_flag:
-            if len(self.obstacle_route_list) != 0:
+        # if not self.obstacle_flag:
+        #     if len(self.obstacle_route_list) != 0:
                 
-                # print(len(self.obstacle_route_list))
-                # Obstacle Exits 
+        #         # print(len(self.obstacle_route_list))
+        #         # Obstacle Exits 
                 
-                init_point = self.obstacle_route_list[0]
-                end_point = self.obstacle_route_list[-1]
+        #         init_point = self.obstacle_route_list[0]
+        #         end_point = self.obstacle_route_list[-1]
         
-                desired_index = -1
-                #for index in range(len(route_list)):
-                for index in range(30):    
-                    route_point = route_list[index]
-                    dis =  distance.euclidean([route_point.x, route_point.y], [init_point[0], init_point[1]])
-                    if dis < 1.0:
-                        desired_index = index
+        #         desired_index = -1
+        #         #for index in range(len(route_list)):
+        #         for index in range(30):    
+        #             route_point = route_list[index]
+        #             dis =  distance.euclidean([route_point.x, route_point.y], [init_point[0], init_point[1]])
+        #             if dis < 1.0:
+        #                 desired_index = index
                         
-                if desired_index != -1:
-                    # set obstacle target point 
-                    self.obstacle_target_point = Loc(x=end_point[0], y=end_point[1])    
-                    route_list = route_list[:desired_index]
+        #         if desired_index != -1:
+        #             # set obstacle target point 
+        #             self.obstacle_target_point = Loc(x=end_point[0], y=end_point[1])    
+        #             route_list = route_list[:desired_index]
                     
-                    # concate with obstacle route 
-                    for i in range(len(self.obstacle_route_list)):
-                        loc = Loc(x=self.obstacle_route_list[i][0], y=self.obstacle_route_list[i][1])
-                        route_list.append(loc)
-                    # print(len(self.obstacle_route_list))
-                    # print("concate route ")
+        #             # concate with obstacle route 
+        #             for i in range(len(self.obstacle_route_list)):
+        #                 loc = Loc(x=self.obstacle_route_list[i][0], y=self.obstacle_route_list[i][1])
+        #                 route_list.append(loc)
+        #             # print(len(self.obstacle_route_list))
+        #             # print("concate route ")
                         
-                    route = self.planner.trace_route(carla.Location(route_list[-1].x, route_list[-1].y), self.destination )
-                    new_route = []
-                    for i in range(len(route)):
-                        new_route.append(Loc(route[i][0].transform.location.x, route[i][0].transform.location.y))
-                    route_list += new_route
+        #             route = self.planner.trace_route(carla.Location(route_list[-1].x, route_list[-1].y), self.destination )
+        #             new_route = []
+        #             for i in range(len(route)):
+        #                 new_route.append(Loc(route[i][0].transform.location.x, route[i][0].transform.location.y))
+        #             route_list += new_route
                     
-                    self.obstacle_flag = True
+        #             self.obstacle_flag = True
                     
-                    result["update_route"] = True
-                    # uppdte route 
+        #             result["update_route"] = True
+        #             # uppdte route 
                     
                         
         ####
@@ -1937,424 +1996,334 @@ def spawn_obstacle(scenario_obstacles, world, client):
         else:
             blueprint = world.world.get_blueprint_library().find(f"static.prop.{obstacle_type}")
         
-        #try:
-        # print(blueprint, obstacle_transform)
-        obstacle = client.get_world().spawn_actor(blueprint, obstacle_transform)
-    
-        id = obstacle.id
-        obstacles_id_list.append(id)
+        try:
+            obstacle = client.get_world().spawn_actor(blueprint, obstacle_transform)
+        
+            id = obstacle.id
+            obstacles_id_list.append(id)
+            
+        except:
+            pass    
             
     return obstacles_id_list
 
-def spawn_actor_nearby(world, client, waypoint_list, agent_dict, obstacle_pos):
+def spawn_actor_nearby(world, client, spawn_points, agent_dict, route_list, ego_route_index, planner, args, processed_policy):
     
-    # obstacle_pos
-    random.seed(time.time())
-    actor_numbers = random.randrange(8) 
+    num_of_vehicle = len(route_list) # -1 
+    print(f"spawn {num_of_vehicle} actors")
     
-    print(f"spawn {actor_numbers} actors")
     vehicles_list = []
-    for _, transform in enumerate(waypoint_list):
-        
-        distance = math.sqrt((obstacle_pos[0][0] - transform.location.x)**2 + (obstacle_pos[0][1] - transform.location.y)**2)
-        
-        if distance > 60 or distance < 10:
+    blueprints = world.world.get_blueprint_library().filter('vehicle.*')
+    
+    for i in range(num_of_vehicle):
+        if i == ego_route_index:
             continue
-        if len(vehicles_list) == actor_numbers:
-            break
-        
-        blueprint = world.world.get_blueprint_library().find('vehicle.lincoln.mkz_2017')
-
-        if blueprint.has_attribute('color'):
-            color = random.choice(blueprint.get_attribute('color').recommended_values)
-            blueprint.set_attribute('color', color)
-        if blueprint.has_attribute('driver_id'):
-            driver_id = random.choice(blueprint.get_attribute('driver_id').recommended_values)
-            blueprint.set_attribute('driver_id', driver_id)
-        # blueprint, transform
-        try:
-            other_agent = client.get_world().spawn_actor(blueprint, transform)
-            id = other_agent.id
-            vehicles_list.append(id)
+        route = route_list[i]
             
+        point1 = route[0]
+        point2 = route[1]
+        yaw = get_yaw(point1, point2)
+        transform = carla.Transform(carla.Location(x=point1[0], y=point1[1], z=2.0), carla.Rotation(roll=0.0, pitch=0.0, yaw=yaw))
+        
+        # blueprint = world.world.get_blueprint_library().find('vehicle*') 
+                                                             #lincoln.mkz_2017')
+        blueprint = random.choice(blueprints)
+        
+        try:
+        
+            # 
+            
+            agent = client.get_world().spawn_actor(blueprint, transform)
+            
+            
+            id = agent.id
+            vehicles_list.append(id)
             agent_dict[id] = {}
-            agent_dict[id]["agent"] = other_agent
+            agent_dict[id]["agent"] = agent
+            agent_dict[id]["result"] = {}
+            
+            destination = random.choice(spawn_points).location
+            current_route = planner.trace_route(carla.Location(route[-1][0], route[-1][1]), destination)
+            
+            agent_route = []
+            for i in range(len(route)):
+                loc = Loc(x=route[i][0], y=route[i][1])
+                agent_route.append(loc)
+                
+            for i in range(len(current_route)):
+                loc = Loc(x=current_route[i][0].transform.location.x, y=current_route[i][0].transform.location.y)
+                agent_route.append(loc)
+            
+            agent_bev_map = BEV_MAP(args, world)
+            agent_bev_map.init_vehicle_bbox(id)
+            agent_bev_map.set_policy(processed_policy)
+            agent_dict[id]["bev_map"] = agent_bev_map
+            agent_dict[id]["route"] = agent_route
         except:
-            print("Spawn failed because of collision at spawn position")
+            pass
             
     return vehicles_list, agent_dict
 
+def get_yaw(point1, point2):
+    point1 = np.array(point1)
+    point2 = np.array(point2)
+    yaw_vector = (point2 - point1)
+    vector = [1, 0]
+    unit_vector_1 = yaw_vector / np.linalg.norm(yaw_vector)
+    unit_vector_2 = vector / np.linalg.norm(vector)
+    dot_product = np.dot(unit_vector_1, unit_vector_2)
+    angle = np.arccos(dot_product)
+    if yaw_vector[1] < 0:
+        yaw = -math.degrees(angle)
+    else:
+        yaw = math.degrees(angle)
+    return yaw
+
 def game_loop(args):
+    
     pygame.init()
     pygame.font.init()
     world = None
 
-    #try:
-    if True:
+    # scenario     
+    obstacle_data = load_dict(f"./obstacle_scenarios/{args.town}.pkl")
+    print(len(obstacle_data))
+    print("")
     
-        client = carla.Client(args.host, args.port)
-        client.set_timeout(10.0)
-
-        # display = pygame.display.set_mode(
-        #     (args.width, args.height),
-        #     pygame.HWSURFACE | pygame.DOUBLEBUF)
+    obstacle_scneario_index = 22
+    ego_route_index = 1
+    
+    # SAVING FLAG
+    saving_flag = False
+    saving_flag = True
         
-        display = pygame.display.set_mode(
-            (512, 900),
-            pygame.HWSURFACE | pygame.DOUBLEBUF)
-        display.fill((0,0,0))
-        pygame.display.flip()
+    use_threshold = False
+    # use_threshold = True
+    
+    scenario_info = obstacle_data[obstacle_scneario_index]
+    ego_counter_threshold_min = 40
+    ego_counter_threshold_max = 50
+    obstacle_route_list = scenario_info[2] 
+    obstacle_info = scenario_info[1] # All obstacle type and transforms  
+    # get ego transform 
+    # get other vehicle transform 
+    # Ego vehicle take the first route 
+    point1 = obstacle_route_list[ego_route_index][0]
+    point2 = obstacle_route_list[ego_route_index][1]
+    yaw = get_yaw(point1, point2)
+    
+    ego_transform = carla.Transform(carla.Location(x=point1[0], y=point1[1], z=3.0), carla.Rotation(roll=0.0, pitch=0.0, yaw=yaw))
+    # ego_transform = carla.Transform(carla.Location(x=point1[0], y=point1[1], z=5.0), carla.Rotation(roll=0.0, pitch=0.0, yaw=yaw))
 
-        hud = HUD(args.width, args.height, args.distance)
-        world = World(client.load_world(args.town), hud, args)
+    
+    ############################################################
+    
+    client = carla.Client(args.host, args.port)
+    client.set_timeout(10.0)
 
-        settings = world.world.get_settings()
-        settings.fixed_delta_seconds = 0.05
-        settings.synchronous_mode = True  # Enables synchronous mode
-        world.world.apply_settings(settings)
+    # display = pygame.display.set_mode(
+    #     (args.width, args.height),
+    #     pygame.HWSURFACE | pygame.DOUBLEBUF)
+    
+    display = pygame.display.set_mode(
+        (512, 900),
+        pygame.HWSURFACE | pygame.DOUBLEBUF)
+    display.fill((0,0,0))
+    pygame.display.flip()
 
-        controller = KeyboardControl(world, args.autopilot)
+    hud = HUD(args.width, args.height, args.distance)
+    world = World(client.load_world(args.town), hud, args, ego_transform)
+
+    settings = world.world.get_settings()
+    settings.fixed_delta_seconds = 0.05
+    settings.synchronous_mode = True  # Enables synchronous mode
+    world.world.apply_settings(settings)
+    controller = KeyboardControl(world, args.autopilot)
+    
+    map = world.world.get_map()
+    spawn_points = map.get_spawn_points()
+    waypoint_list = []
+    for waypoint in spawn_points:            
+        waypoint_list.append(waypoint)
         
-        ############################################################
-        # init for obstacles
+    planner = GlobalRoutePlanner(map, resolution=1.0)
+    clock = pygame.time.Clock()
+
+    #### initialize the ego player ####
+    result = {}
+    player_bev_map = BEV_MAP(args, world)
+    processed_policy = player_bev_map.init_policy()
+    player_bev_map.init_vehicle_bbox(world.player.id)
+    player_bev_map.init_spawn_points_and_planner(map.get_spawn_points(), planner)
+    
+    destination = random.choice(spawn_points).location
+    current_route = planner.trace_route(carla.Location(obstacle_route_list[ego_route_index][-1][0], obstacle_route_list[ego_route_index][-1][1]), destination)
+    player_bev_map.set_destination(destination)
+    player_bev_map.set_end_point( Loc(x=obstacle_route_list[ego_route_index][-1][0], y=obstacle_route_list[ego_route_index][-1][1]))
+    
+    ego_route = []
+    for i in range(len(obstacle_route_list[ego_route_index])):
+        loc = Loc(x=obstacle_route_list[ego_route_index][i][0], y=obstacle_route_list[ego_route_index][i][1])
+        ego_route.append(loc)
         
-        obstacle_data = load_dict(f"./obstacle_scenarios/{args.town}.pkl")
-        obstacle_index_to_avgPos = []
-        obstacle_scenarios_list = []
-        obstacle_route_list = []
-
-        for obstacle_info in obstacle_data:
-            detect_point = obstacle_info[0]
-            obstacle_route = obstacle_info[2] 
-            obstacle_info = obstacle_info[1]
-
-            obstacle_index_to_avgPos.append(np.array([(detect_point[0], detect_point[1])]))
-            obstacle_scenarios_list.append(obstacle_info)
-            obstacle_route_list.append(obstacle_route)
-
-        ############################################################
+    for i in range(len(current_route)):
+        loc = Loc(x=current_route[i][0].transform.location.x, y=current_route[i][0].transform.location.y)
+        ego_route.append(loc)
         
-        frame = world.world.tick() 
-
-        ##### spawn other agents (currently not support) #####
-        map = world.world.get_map()
-        spawn_points = map.get_spawn_points()
-        waypoint_list = []
-        for waypoint in spawn_points:            
-            waypoint_list.append(waypoint)
-            
-        planner = GlobalRoutePlanner(map, resolution=1.0)
-        clock = pygame.time.Clock()
-
-        #### initialize the ego player ####
-        result = {}
-        player_bev_map = BEV_MAP(args, world)
-        processed_policy = player_bev_map.init_policy()
-        player_bev_map.init_vehicle_bbox(world.player.id)
-        player_bev_map.init_spawn_points_and_planner(map.get_spawn_points(), planner)
         
-        destination = random.choice(spawn_points).location
-        current_route = planner.trace_route(world.player.get_location(), destination)
-        player_bev_map.set_destination(destination)
+    ####################################################################################################
+    # spawn other vehicle
+    vehicles_list = []
+    agent_dict = {} 
+    
+    vehicles_list, agent_dict = spawn_actor_nearby(world, client, spawn_points, agent_dict, obstacle_route_list, ego_route_index, planner, args, processed_policy)
         
-        ego_route = []
-        for i in range(len(current_route)):
-            loc = Loc(current_route[i][0].transform.location.x, current_route[i][0].transform.location.y)
-            ego_route.append(loc)
-            
-            
-        ####################################################################################################
-        vehicles_list = []
-        agent_dict = {} #
-                    
-        is_obstacle_exist = False
-        init_counter = 0
         
-        # SAVING FLAG
-        saving_flag = False
-        # sAVING NAME 
-        saving_path = ""
-        start_frame = None
+    ####################################################################################################
+    # spawn obstacles 
+    
+    obstacles_ids = spawn_obstacle(obstacle_info, world, client)
+    print("spawn obstacle ")
+    # all spawn fails
+    if len(obstacles_ids) == 0:
+        print( "Obstacle spawn fail")
+    
+    ## set obstacle id 
+    player_bev_map.set_obstacle_ids(obstacles_ids)  
+    for id in vehicles_list:
+        agent_dict[id]["bev_map"].set_obstacle_ids(obstacles_ids)  
+            
+    ####################################################################################################
+    
+    start_frame = world.world.tick()
+    
+    
+    # For data collection     
+    # if os.path.exists("./dataset/"):
+    current_dataset = os.listdir("./dataset")  
+    # filter by Town
+    current_dataset = list(filter(lambda x: (args.town in x), current_dataset))  
+    
+    n = len(current_dataset) + 1
+    saving_path = f"./dataset/{args.town}_obstacle_{n}"
+    if saving_flag:
+        if not os.path.exists(saving_path):
+            os.makedirs(saving_path)
+
+    world.world.tick()
+    
+    
+    counter_for_ego = 0
+    while True:
         
-        while True:
-            
-            
-            random.seed(time.time())
-            random.shuffle(waypoint_list)
-            
-            
-            clock.tick_busy_loop(20)
-            frame = world.world.tick()
-            if controller.parse_events(client, world, clock):
-                return
-            view = pygame.surfarray.array3d(display)
-            view = view.transpose([1, 0, 2]) 
-            image = cv2.cvtColor(view, cv2.COLOR_RGB2BGR)
-            world.tick(clock, frame, image)
+        random.seed(time.time())
+        random.shuffle(waypoint_list)
+        
+        clock.tick_busy_loop(20)
+        frame = world.world.tick()
+        if controller.parse_events(client, world, clock):
+            return
+        view = pygame.surfarray.array3d(display)
+        view = view.transpose([1, 0, 2]) 
+        image = cv2.cvtColor(view, cv2.COLOR_RGB2BGR)
+        world.tick(clock, frame, image)
 
-            ego_current_location = world.player.get_location()
-            ego_current_location = Loc(x=ego_current_location.x, y=ego_current_location.y)
+        ego_current_location = world.player.get_location()
+        ego_current_location = Loc(x=ego_current_location.x, y=ego_current_location.y)
+        
+        # Deal with ego_route
+        # Delete reached points from current route
+        while check_close(ego_current_location, ego_route[0]):
+            ego_route.pop(0)
+    
+        # Collect data for all agents
+        processed_data = player_bev_map.collect_actor_data(world)
+
+        ###################Ego vehicle control#####################
+        player_bev_map.run_step(result, world.player.id, ego_route)
+        bev_map_rgb = result["bev_map_rgb"] # to vis
+        # if result["update_route"]:
+        #     ego_route = result["current_route"]
+
+        control_elements_list = result["control_elements_list"]
+        # for render
+        surface = pygame.surfarray.make_surface(bev_map_rgb)
+        surface = pygame.transform.flip(surface, True, False)
+        surface = pygame.transform.rotate(surface, 90)
+        display.blit(surface, (256, 0))
+
+        control_elements = control_elements_list[0]
+        control = carla.VehicleControl(throttle=control_elements['throttle'], steer=control_elements['steer'], brake=control_elements['brake'])
+        
+        if use_threshold and  counter_for_ego < ego_counter_threshold_max and  counter_for_ego > ego_counter_threshold_min:  
+            control = carla.VehicleControl(throttle=0, steer=control_elements['steer'], brake=1)
             
-            # ego_route
-            # Delete reached points from current route
-            while check_close(ego_current_location, ego_route[0]):
-                ego_route.pop(0)
-                if len(ego_route) == 0:
-                    new_destination = random.choice(spawn_points).location
-                    player_bev_map.set_destination(new_destination)
-                    # new_destination = carla.Location(obstacle_route[0][0], obstacle_route[0][1])
-                    # np.delete(obstacle_route, 0)
-                    current_route = planner.trace_route(world.player.get_location(), new_destination)
-                    ego_route = []
-                    for i in range(len(current_route)):
-                        loc = Loc(current_route[i][0].transform.location.x, current_route[i][0].transform.location.y)
-                        ego_route.append(loc)        
-                            
-            # Generate new destination if the current one is close 
-            if len(ego_route) < 30:
-                # print("ADD New destination")
-                new_destination = random.choice(spawn_points).location
-                player_bev_map.set_destination(new_destination)
-                
-                route = planner.trace_route(carla.Location(ego_route[-1].x, ego_route[-1].y), new_destination)
-                new_route = []
-                for i in range(len(route)):
-                    new_route.append(Loc(route[i][0].transform.location.x, route[i][0].transform.location.y))
-                ego_route += new_route
-                
-            # Collect data for all agents
-            processed_data = player_bev_map.collect_actor_data(world)
+        counter_for_ego +=1
+        
+        world.player.apply_control( control )
+        ###################Ego car control#####################
 
-            ###################Ego car control#####################
-            player_bev_map.run_step(result, frame, world.player.id, ego_route)
-            bev_map_rgb = result["bev_map_rgb"] # to vis
-            if result["update_route"]:
-                ego_route = result["current_route"]
+        ###################Other vehicle control#####################
+        
+        for _, id in enumerate(vehicles_list):
+            agent_current_location = agent_dict[id]['agent'].get_location()
+            agent_current_location = Loc(x=agent_current_location.x, y=agent_current_location.y)
 
-            control_elements_list = result["control_elements_list"]
-            # for render
+            while check_close(agent_current_location, agent_dict[id]["route"][0]):
+                agent_dict[id]["route"].pop(0)
+
+            agent_dict[id]["bev_map"].set_data(processed_data)
+            agent_dict[id]["bev_map"].run_step(agent_dict[id]["result"], id, agent_dict[id]["route"]) 
+            
+            # if agent_dict[id]["result"]["update_route"]:
+            #     agent_dict[id]["route"] = agent_dict[id]["result"]["current_route"]
+            
+            control_elements_list = agent_dict[id]["result"]["control_elements_list"]
+            control_elements = control_elements_list[0]
+            control = carla.VehicleControl(throttle=control_elements['throttle'], steer=control_elements['steer'], brake=control_elements['brake'])
+            agent_dict[id]["agent"].apply_control(control)
+            
+        # for render 
+        for i, id in enumerate(vehicles_list):
+            if i == 3 :
+                break
+            bev_map_rgb = agent_dict[id]["result"]["bev_map_rgb"]
             surface = pygame.surfarray.make_surface(bev_map_rgb)
             surface = pygame.transform.flip(surface, True, False)
             surface = pygame.transform.rotate(surface, 90)
-            display.blit(surface, (256, 0))
-
-            control_elements = control_elements_list[0]
-            control = carla.VehicleControl(throttle=control_elements['throttle'], steer=control_elements['steer'], brake=control_elements['brake'])
-            world.player.apply_control( control )
-            ###################Ego car control#####################
-
-            ###################Other vehicle control#####################
-            
-            for _, id in enumerate(vehicles_list):
-                agent_current_location = agent_dict[id]['agent'].get_location()
-                agent_current_location = Loc(x=agent_current_location.x, y=agent_current_location.y)
-
-                while len(agent_dict[id]["route"]) == 0:
-
-                    # self.obstacle_route_list 
-                    destination = agent_dict[id]["bev_map"].obstacle_route_list[-1]
-                    
-                    destination = carla.Location( x=destination[0], y=destination[1])
-                    
-                    # set the same destination with ego vehicle 
-                    agent_dict[id]["bev_map"].set_destination(player_bev_map.destination) # 
-
-                    current_route = planner.trace_route(agent_dict[id]['agent'].get_location(), player_bev_map.destination)
-                    agent_route = []
-                    for i in range(len(current_route)):
-                        loc = Loc(current_route[i][0].transform.location.x, current_route[i][0].transform.location.y)
-                        agent_route.append(loc) 
-                    agent_dict[id]["route"] = agent_route
-                    # Delete reached points from current route
-                
-                    if len(agent_dict[id]["route"]) < 10 :
-                        new_destination = random.choice(spawn_points).location
-                        agent_dict[id]["bev_map"].set_destination(new_destination)
-                        route = planner.trace_route(agent_dict[id]['agent'].get_location(), new_destination)
-                        new_route = []
-                        for i in range(len(route)):
-                            new_route.append(Loc(route[i][0].transform.location.x, route[i][0].transform.location.y))
-                        agent_dict[id]["route"] = new_route
-                
-                while check_close(agent_current_location, agent_dict[id]["route"][0]):
-                    agent_dict[id]["route"].pop(0)
-                    
-                # Generate new destination if the current one is close 
-                if len(agent_dict[id]["route"]) < 30:
-                    new_destination = random.choice(spawn_points).location
-                    agent_dict[id]["bev_map"].set_destination(new_destination)
-                    
-                    route = planner.trace_route(carla.Location(agent_dict[id]["route"][-1].x, agent_dict[id]["route"][-1].y), new_destination)
-                    new_route = []
-                    for i in range(len(route)):
-                        new_route.append(Loc(route[i][0].transform.location.x, route[i][0].transform.location.y))
-                    agent_dict[id]["route"] += new_route
-                    
-                agent_dict[id]["bev_map"].set_data(processed_data)
-                    
-                agent_dict[id]["bev_map"].run_step(agent_dict[id]["result"], frame, id, agent_dict[id]["route"]) 
-                
-                if agent_dict[id]["result"]["update_route"]:
-                    agent_dict[id]["route"] = agent_dict[id]["result"]["current_route"]
-                
-                control_elements_list = agent_dict[id]["result"]["control_elements_list"]
-                control_elements = control_elements_list[0]
-                control = carla.VehicleControl(throttle=control_elements['throttle'], steer=control_elements['steer'], brake=control_elements['brake'])
-                agent_dict[id]["agent"].apply_control(control)
-                
-            for i, id in enumerate(vehicles_list):
-                if i == 3 :
-                    break
-
-                bev_map_rgb = agent_dict[id]["result"]["bev_map_rgb"]
-                surface = pygame.surfarray.make_surface(bev_map_rgb)
-                surface = pygame.transform.flip(surface, True, False)
-                surface = pygame.transform.rotate(surface, 90)
-                display.blit(surface, (256, 210*(i+1)))  
-            
-            init_counter +=1 
-            if init_counter > 250:
-                if not is_obstacle_exist:
-                    # if there is no obstacle in the map 
-                    # --> base on the future route --> spawn obstacle scenario 
-                    waypoint_array = []
-                    for point in ego_route[:80]:
-                        # print(point)
-                        x = point.x
-                        y = point.y
-                        waypoint_array.append((x, y))
-                    waypoint_array = np.array(waypoint_array)
-                    
-                    if len(waypoint_array) > 40:
-                        
-                
-                        min_distance = 1000
-                        desire_index = -1
-                        for index in range(len(obstacle_index_to_avgPos)) :
-                            avg_pos = obstacle_index_to_avgPos[index]
-                            dis = distance.cdist(avg_pos, waypoint_array).min(axis=1)
-                            if min_distance > dis:                        
-                                desire_index = index
-                                min_distance = dis
-                            if min_distance < 1.0:
-                                break
-                        
-                        if min_distance < 1.3:
-                            obstacles_ids = spawn_obstacle(obstacle_scenarios_list[desire_index], world, client)
-                            print("spawn obstacle ")
-                            # all spawn fails
-                            if len(obstacles_ids) == 0:
-                                continue
-                            is_obstacle_exist = True
-                            player_bev_map.set_obstacle_ids(obstacles_ids)  
-                            player_bev_map.set_obstacle_route_list(obstacle_route_list[desire_index])
-                            
-                            
-                            ### spawn random actors nearby obstacles 
-                            
-                            vehicles_list, agent_dict = spawn_actor_nearby(world, client, waypoint_list, agent_dict, obstacle_index_to_avgPos[desire_index])
-                            
-                            for  id in vehicles_list:
-                                
-                                agent_bev_map = BEV_MAP(args, world)
-                                agent_bev_map.init_vehicle_bbox(id)
-                                agent_bev_map.set_policy(processed_policy)
-                                agent_bev_map.init_spawn_points_and_planner(map.get_spawn_points(), planner)
-                                
-                                agent_dict[id]["bev_map"] = agent_bev_map
-                                agent_dict[id]["route"] = [] 
-                                agent_dict[id]["result"] = {}
-                                agent_dict[id]["bev_map"].set_obstacle_ids(obstacles_ids)  
-                                agent_dict[id]["bev_map"].set_obstacle_route_list(obstacle_route_list[desire_index])
-                                
-                            saving_flag = True 
-                            
-                            start_frame = frame
-                            # if os.path.exists("./dataset/"):
-                            current_dataset = os.listdir("./dataset")  
-                            
-                            # filter by Town
-                            current_dataset = list(filter(lambda x: (args.town in x), current_dataset))  
-                            
-                            n = len(current_dataset) + 1
-                            saving_path = f"./dataset/{args.town}_obstacle_{n}"
-                            
-                            if not os.path.exists(saving_path):
-                                os.makedirs(saving_path)
-                        
-                else:
-                    
-                    # TODO:
-                    # if obstalce is far away from ego car , then remove obstacle 
-                    # check if ego vehicle reach the obstacle point 
-                    if player_bev_map.obstacle_flag:
-                        if check_close(ego_current_location, player_bev_map.obstacle_target_point, 3): 
-                            is_obstacle_exist = False
-                            
-                            # destroy obstacles 
-                            client.apply_batch([carla.command.DestroyActor(x) for x in obstacles_ids])
-                            player_bev_map.set_obstacle_ids([])
-                            player_bev_map.set_obstacle_route_list([])
-                            
-                            
-                            client.apply_batch([carla.command.DestroyActor(x) for x in vehicles_list])
-                            for  id in vehicles_list:
-                                agent_dict.pop(id)
-                            
-                            vehicles_list = [] 
-
-                            obstacles_ids = []
-                            player_bev_map.obstacle_flag = False
-                            player_bev_map.obstacle_route_list = []
-                            print("Destory obstacles and other vehicles ")
-                            
-                            
-                            init_counter = 0
-                            
-                            saving_flag = False
+            display.blit(surface, (256, 210*(i+1)))  
         
-            if saving_flag :
-                route_list = []
-                for wp in ego_route:
-                    route_list.append([wp.x, wp.y])
-                processed_data["ego_id"] = world.player.id 
-                processed_data["ego_route"] = route_list
-                processed_data["obstacle_ids"] = player_bev_map.obstacle_ids # id including illege parking vehicles 
+            
+        # DATA saving        
+        if saving_flag :
+            route_list = []
+            for wp in ego_route:
+                route_list.append([wp.x, wp.y])
+            processed_data["ego_id"] = world.player.id 
+            processed_data["ego_route"] = route_list
+            processed_data["obstacle_ids"] = player_bev_map.obstacle_ids # id including illege parking vehicles 
 
-                current_frame = frame - start_frame
-                # np.savez_compressed( f"{saving_path}/" + "%04d" % current_frame, np.array(processed_data), allow_pickle=True) # store with npz in compressed format will save much of space on disk
-            
-                
-                            
-            world.hud.render(display)
-            pygame.display.flip()
-
-            
-            
-            
-            # world.render(display)
-
-            
-    # except Exception as e:
-    #       print(e)
-    # finally:
-        settings = world.world.get_settings()
-        settings.synchronous_mode = False 
-        world.world.apply_settings(settings)
-
-        print('destroying vehicles')
+            current_frame = frame - start_frame
+            np.savez_compressed( f"{saving_path}/" + "%04d" % current_frame, np.array(processed_data), allow_pickle=True) # store with npz in compressed format will save much of space on disk
         
-        client.apply_batch([carla.command.DestroyActor(x) for x in vehicles_list])
         
-        if (world and world.recording_enabled):
-            client.stop_recorder()
+        world.hud.render(display)
+        pygame.display.flip()
+        
+        if check_close(ego_current_location, player_bev_map.end_point , distance=2):
+            break
 
-        if world is not None:
-            world.destroy()
+    # destroy obstacles 
+    client.apply_batch([carla.command.DestroyActor(x) for x in obstacles_ids])
+    client.apply_batch([carla.command.DestroyActor(x) for x in vehicles_list])
 
-        pygame.quit()
+    print("Destory obstacles and other vehicles ")
+    
+    if world is not None:
+        world.destroy()
 
-
+    pygame.quit()
+            
 # ==============================================================================
 # -- main() --------------------------------------------------------------------
 # ==============================================================================
@@ -2413,11 +2382,7 @@ def main():
         default=2.2,
         type=float,
         help='Gamma correction of the camera (default: 2.2)')
-    argparser.add_argument(
-        '--n',
-        default='4',
-        type=int,
-        help='number of Roach agents)')
+
     args = argparser.parse_args()
 
     args.width, args.height = [int(x) for x in args.res.split('x')]
