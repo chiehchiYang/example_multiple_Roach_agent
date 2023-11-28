@@ -1671,7 +1671,7 @@ def spawn_obstacle(scenario_obstacles, world, client):
         if obstacle_type == "illegal_parking":
             
             vehicle_blueprints = [ 
-                                    "vehicle.tesla.model3"
+                                    "vehicle.tesla.model3",
                                     "vehicle.tesla.cybertruck", 
                                     "vehicle.nissan.patrol", 
                                     "vehicle.dodge_charger.police", 
