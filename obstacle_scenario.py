@@ -93,7 +93,6 @@ import math
 import random
 import re
 import weakref
-# from auto_random_actors import spawn_actor_nearby
 import cv2
 from navigation.global_route_planner import GlobalRoutePlanner
 import copy
@@ -162,7 +161,6 @@ except ImportError:
 
 import numpy as np
 import matplotlib.pyplot as plt
-import copy
 import math
 import sys
 import pathlib
@@ -223,19 +221,19 @@ class World(object):
         self.recording_start = 0
         self.constant_velocity_enabled = False
         self.current_map_layer = 0
-        self.map_layer_names = [
-            carla.MapLayer.NONE,
-            carla.MapLayer.Buildings,
-            carla.MapLayer.Decals,
-            carla.MapLayer.Foliage,
-            carla.MapLayer.Ground,
-            carla.MapLayer.ParkedVehicles,
-            carla.MapLayer.Particles,
-            carla.MapLayer.Props,
-            carla.MapLayer.StreetLights,
-            carla.MapLayer.Walls,
-            carla.MapLayer.All
-        ]
+        # self.map_layer_names = [
+        #     carla.MapLayer.NONE,
+        #     carla.MapLayer.Buildings,
+        #     carla.MapLayer.Decals,
+        #     carla.MapLayer.Foliage,
+        #     carla.MapLayer.Ground,
+        #     carla.MapLayer.ParkedVehicles,
+        #     carla.MapLayer.Particles,
+        #     carla.MapLayer.Props,
+        #     carla.MapLayer.StreetLights,
+        #     carla.MapLayer.Walls,
+        #     carla.MapLayer.All
+        # ]
     def get_yaw(self, current_pos, previous_point):
         yaw_vector = (current_pos - previous_point)
 
@@ -265,8 +263,9 @@ class World(object):
         # Get a random blueprint.
         # blueprint = random.choice(self.world.get_blueprint_library().filter(self._actor_filter))
         
-        
-        blueprint = self.world.get_blueprint_library().find('vehicle.lincoln.mkz_2017')
+        # Actor(id=690, type=vehicle.lincoln.mkz2017)
+ 
+        blueprint = self.world.get_blueprint_library().find('vehicle.lincoln.mkz2017')
         blueprint.set_attribute('role_name', self.actor_role_name)
         if blueprint.has_attribute('color'):
             color = random.choice(blueprint.get_attribute('color').recommended_values)
@@ -294,7 +293,7 @@ class World(object):
         self.player = self.world.try_spawn_actor(blueprint, ego_transform) # spawn_point)
         
         
-        print(self.player)
+        # print(self.player)
         self.show_vehicle_telemetry = False
         self.modify_vehicle_physics(self.player)            
         # while self.player is None:
@@ -403,6 +402,8 @@ class CollisionSensor(object):
     def __init__(self, parent_actor, hud):
         self.sensor = None
         self.history = []
+        
+        self.collision_flag = False
         self._parent = parent_actor
         self.hud = hud
         world = self._parent.get_world()
@@ -412,6 +413,7 @@ class CollisionSensor(object):
         # reference.
         weak_self = weakref.ref(self)
         self.sensor.listen(lambda event: CollisionSensor._on_collision(weak_self, event))
+        
 
     def get_collision_history(self):
         history = collections.defaultdict(int)
@@ -431,8 +433,10 @@ class CollisionSensor(object):
         self.history.append((event.frame, intensity))
         if len(self.history) > 4000:
             self.history.pop(0)
+        
+        
+        self.collision_flag = True
         print("collision ")
-
 
 # ==============================================================================
 # -- KeyboardControl -----------------------------------------------------------
@@ -477,10 +481,10 @@ class KeyboardControl(object):
                     #     world.restart()
                 elif event.key == K_F1:
                     world.hud.toggle_info()
-                elif event.key == K_v and pygame.key.get_mods() & KMOD_SHIFT:
-                    world.next_map_layer(reverse=True)
-                elif event.key == K_v:
-                    world.next_map_layer()
+                # elif event.key == K_v and pygame.key.get_mods() & KMOD_SHIFT:
+                #     world.next_map_layer(reverse=True)
+                # elif event.key == K_v:
+                #     world.next_map_layer()
                 elif event.key == K_b and pygame.key.get_mods() & KMOD_SHIFT:
                     world.load_map_layer(unload=True)
                 elif event.key == K_b:
@@ -926,7 +930,6 @@ class HelpText(object):
             display.blit(self.surface, self.pos)
 
 
-
 # ==============================================================================
 # -- GnssSensor ----------------------------------------------------------------
 # ==============================================================================
@@ -992,343 +995,6 @@ class IMUSensor(object):
             max(limits[0], min(limits[1], math.degrees(sensor_data.gyroscope.y))),
             max(limits[0], min(limits[1], math.degrees(sensor_data.gyroscope.z))))
         self.compass = math.degrees(sensor_data.compass)
-
-
-# ==============================================================================
-# -- CameraManager -------------------------------------------------------------
-# ==============================================================================
-
-
-class CameraManager(object):
-    def __init__(self, parent_actor, hud, gamma_correction, save_mode=True):
-        # self.sensor_front = None
-        self.sensor_rgb_front = None
-
-        self.surface = None
-        self._parent = parent_actor
-        self.hud = hud
-        self.recording = False
-        self.save_mode = save_mode
-        self.rgb_front = None
-        self.ss_front = None
-
-        bound_x = 0.5 + self._parent.bounding_box.extent.x
-        bound_y = 0.5 + self._parent.bounding_box.extent.y
-        bound_z = 0.5 + self._parent.bounding_box.extent.z
-        Attachment = carla.AttachmentType
-
-        if not self._parent.type_id.startswith("walker.pedestrian"):
-            self._camera_transforms = [
-                # front view
-                (carla.Transform(carla.Location(x=+0.8*bound_x,
-                 y=+0.0*bound_y, z=1.3*bound_z)), Attachment.Rigid),
-                # front-left view
-                (carla.Transform(carla.Location(x=+0.8*bound_x, y=+0.0*bound_y,
-                 z=1.3*bound_z), carla.Rotation(yaw=-55)), Attachment.Rigid),
-                # front-right view
-                (carla.Transform(carla.Location(x=+0.8*bound_x, y=+0.0*bound_y,
-                 z=1.3*bound_z), carla.Rotation(yaw=55)), Attachment.Rigid),
-                # back view
-                (carla.Transform(carla.Location(x=-0.8*bound_x, y=+0.0*bound_y,
-                 z=1.3*bound_z), carla.Rotation(yaw=180)), Attachment.Rigid),
-                # back-left view
-                (carla.Transform(carla.Location(x=-0.8*bound_x, y=+0.0*bound_y,
-                 z=1.3*bound_z), carla.Rotation(yaw=235)), Attachment.Rigid),
-                # back-right view
-                (carla.Transform(carla.Location(x=-0.8*bound_x, y=+0.0*bound_y,
-                 z=1.3*bound_z), carla.Rotation(yaw=-235)), Attachment.Rigid),
-                # top view
-                (carla.Transform(carla.Location(x=-0.8*bound_x, y=+0.0*bound_y,
-                 z=23*bound_z), carla.Rotation(pitch=18.0)), Attachment.SpringArm),
-                # LBC top view
-                # (carla.Transform(carla.Location(x=0, y=0,
-                #  z=25.0), carla.Rotation(pitch=-90.0)), Attachment.SpringArm),
-                (carla.Transform(carla.Location(x=0, y=0,
-                 z=20.0), carla.Rotation(pitch=-90.0)), Attachment.SpringArm),
-                
-                # sensor config for transfuser camera settings 
-                #  front view 8
-                (carla.Transform(carla.Location(x=1.3, y=0,
-                 z=2.3), carla.Rotation(roll=0.0, pitch=0.0, yaw=0.0)), Attachment.Rigid),
-                # left view  9 
-                (carla.Transform(carla.Location(x=1.3, y=0,
-                 z=2.3), carla.Rotation(roll=0.0, pitch=0.0, yaw=-60.0)), Attachment.Rigid),
-                # right view 10
-                (carla.Transform(carla.Location(x=1.3, y=0,
-                 z=2.3), carla.Rotation(roll=0.0, pitch=0.0, yaw=60.0)), Attachment.Rigid),
-                # rear 11 
-                (carla.Transform(carla.Location(x=-1.3, y=0,
-                 z=2.3), carla.Rotation(roll=0.0, pitch=0.0, yaw=180.0)), Attachment.Rigid),
-                # rear left 12 
-                (carla.Transform(carla.Location(x=-1.3, y=0,
-                 z=2.3), carla.Rotation(roll=0.0, pitch=0.0, yaw=-120.0)), Attachment.Rigid),
-                # rear right 13
-                (carla.Transform(carla.Location(x=-1.3, y=0,
-                 z=2.3), carla.Rotation(roll=0.0, pitch=0.0, yaw=120.0)), Attachment.Rigid)
-            ]
-        else:
-            pass
-            # self._camera_transforms = [
-            #     (carla.Transform(carla.Location(x=-5.5, z=2.5),
-            #      carla.Rotation(pitch=8.0)), Attachment.SpringArm),
-            #     (carla.Transform(carla.Location(x=1.6, z=1.7)), Attachment.Rigid),
-            #     (carla.Transform(carla.Location(x=5.5, y=1.5, z=1.5)),
-            #      Attachment.SpringArm),
-            #     (carla.Transform(carla.Location(x=-8.0, z=6.0),
-            #      carla.Rotation(pitch=6.0)), Attachment.SpringArm),
-            #     (carla.Transform(carla.Location(x=-1, y=-bound_y, z=0.5)), Attachment.Rigid)]
-
-        self.transform_index = 1
-        self.sensors = [
-            ['sensor.camera.rgb', cc.Raw, 'Camera RGB', {}],
-            ['sensor.camera.depth', cc.Raw, 'Camera Depth (Raw)', {}],
-            ['sensor.camera.depth', cc.Depth, 'Camera Depth (Gray Scale)', {}],
-            ['sensor.camera.depth', cc.LogarithmicDepth,
-                'Camera Depth (Logarithmic Gray Scale)', {}],
-            ['sensor.camera.semantic_segmentation', cc.Raw,
-                'Camera Semantic Segmentation (Raw)', {}],
-            ['sensor.camera.semantic_segmentation', cc.CityScapesPalette,
-                'Camera Semantic Segmentation (CityScapes Palette)', {}],
-            ['sensor.lidar.ray_cast', None,
-                'Lidar (Ray-Cast)', {'range': '85', 'rotation_frequency': '25'}],
-            ['sensor.camera.dvs', cc.Raw, 'Dynamic Vision Sensor', {}],
-            ['sensor.camera.optical_flow', None, 'Optical Flow', {}],
-            ['sensor.other.lane_invasion', None, 'Lane lane_invasion', {}],
-            ['sensor.camera.instance_segmentation', cc.CityScapesPalette,
-                'Camera Instance Segmentation (CityScapes Palette)', {}],
-        ]
-        world = self._parent.get_world()
-        bp_library = world.get_blueprint_library()
-
-        # self.bev_bp = bp_library.find('sensor.camera.rgb')
-        # self.bev_bp.set_attribute('image_size_x', str(300))
-        # self.bev_bp.set_attribute('image_size_y', str(300))
-        # self.bev_bp.set_attribute('fov', str(50.0))
-        # if self.bev_bp.has_attribute('gamma'):
-        #     self.bev_bp.set_attribute('gamma', str(gamma_correction))
-        
-        
-        # self.sensor_rgb_bp = bp_library.find('sensor.camera.rgb')
-        # self.sensor_rgb_bp.set_attribute('image_size_x', str(400))
-        # self.sensor_rgb_bp.set_attribute('image_size_y', str(300))
-        # self.sensor_rgb_bp.set_attribute('fov', str(100.0))
-        
-        self.sensor_rgb_bp = bp_library.find('sensor.camera.rgb')
-        self.sensor_rgb_bp.set_attribute('image_size_x', str(512))
-        self.sensor_rgb_bp.set_attribute('image_size_y', str(512))
-        self.sensor_rgb_bp.set_attribute('fov', str(60.0))
-        
-        # self.sensor_ss_bp = bp_library.find('sensor.camera.instance_segmentation')
-        self.sensor_ss_bp = bp_library.find('sensor.camera.semantic_segmentation')
-        # 
-        self.sensor_ss_bp.set_attribute('image_size_x', str(512))
-        self.sensor_ss_bp.set_attribute('image_size_y', str(512))
-        self.sensor_ss_bp.set_attribute('fov', str(60.0))
-        
-        self.sensor_depth_bp = bp_library.find('sensor.camera.depth')
-        self.sensor_depth_bp.set_attribute('image_size_x', str(1280))
-        self.sensor_depth_bp.set_attribute('image_size_y', str(720))
-        self.sensor_depth_bp.set_attribute('fov', str(60.0))
-        
-
-        self.bev_seg_bp = bp_library.find('sensor.camera.instance_segmentation')
-        self.bev_seg_bp.set_attribute('image_size_x', str(400))
-        self.bev_seg_bp.set_attribute('image_size_y', str(400))
-        self.bev_seg_bp.set_attribute('fov', str(50.0))
-
-        self.front_cam_bp = bp_library.find('sensor.camera.rgb')
-        self.front_cam_bp.set_attribute('image_size_x', str(768))
-        self.front_cam_bp.set_attribute('image_size_y', str(256))
-        self.front_cam_bp.set_attribute('fov', str(120.0))
-        self.front_cam_bp.set_attribute('lens_circle_multiplier', '0.0')
-        self.front_cam_bp.set_attribute('lens_circle_falloff', '0.0')
-        self.front_cam_bp.set_attribute('chromatic_aberration_intensity', '3.0')
-        self.front_cam_bp.set_attribute('chromatic_aberration_offset', '500')
-        # self.front_cam_bp.set_attribute('focal_distance', str(500))
-        if self.front_cam_bp.has_attribute('gamma'):
-            self.front_cam_bp.set_attribute('gamma', str(gamma_correction))
-
-        self.front_seg_bp = bp_library.find('sensor.camera.instance_segmentation')
-        self.front_seg_bp.set_attribute('image_size_x', str(768))
-        self.front_seg_bp.set_attribute('image_size_y', str(256))
-        self.front_seg_bp.set_attribute('fov', str(120.0))
-        self.front_cam_bp.set_attribute('lens_circle_multiplier', '0.0')
-        self.front_cam_bp.set_attribute('lens_circle_falloff', '0.0')
-        self.front_cam_bp.set_attribute('chromatic_aberration_intensity', '3.0')
-        self.front_cam_bp.set_attribute('chromatic_aberration_offset', '500')
-        # self.front_seg_bp.set_attribute('focal_distance', str(500))
-        if self.front_seg_bp.has_attribute('gamma'):
-            self.front_seg_bp.set_attribute('gamma', str(gamma_correction))
-
-        self.depth_bp = bp_library.find('sensor.camera.depth')
-        self.depth_bp.set_attribute('image_size_x', str(768))
-        self.depth_bp.set_attribute('image_size_y', str(256))
-        self.depth_bp.set_attribute('fov', str(120.0))
-        self.front_cam_bp.set_attribute('lens_circle_multiplier', '0.0')
-        self.front_cam_bp.set_attribute('lens_circle_falloff', '0.0')
-        self.front_cam_bp.set_attribute('chromatic_aberration_intensity', '3.0')
-        self.front_cam_bp.set_attribute('chromatic_aberration_offset', '500')
-        # self.depth_bp.set_attribute('focal_distance', str(500))
-        if self.depth_bp.has_attribute('gamma'):
-            self.depth_bp.set_attribute('gamma', str(gamma_correction))
-
-        # self.flow_bp = bp_library.find('sensor.camera.optical_flow')
-        # self.flow_bp.set_attribute('image_size_x', str(1236))
-        # self.flow_bp.set_attribute('image_size_y', str(256))
-        # self.flow_bp.set_attribute('fov', str(120.0))
-        self.front_cam_bp.set_attribute('lens_circle_multiplier', '0.0')
-        self.front_cam_bp.set_attribute('lens_circle_falloff', '0.0')
-        self.front_cam_bp.set_attribute('chromatic_aberration_intensity', '3.0')
-        self.front_cam_bp.set_attribute('chromatic_aberration_offset', '500')
-        # self.flow_bp.set_attribute('focal_distance', str(500))
-        # if self.flow_bp.has_attribute('gamma'):
-        #     self.flow_bp.set_attribute('gamma', str(gamma_correction))
-        for item in self.sensors:
-            
-            bp = bp_library.find(item[0])
-            if item[0].startswith('sensor.camera'):
-                bp.set_attribute('image_size_x', str(hud.dim[0]))
-                bp.set_attribute('image_size_y', str(hud.dim[1]))
-                if bp.has_attribute('gamma'):
-                    bp.set_attribute('gamma', str(gamma_correction))
-                for attr_name, attr_value in item[3].items():
-                    bp.set_attribute(attr_name, attr_value)
-            elif item[0].startswith('sensor.lidar'):
-                self.lidar_range = 50
-
-                for attr_name, attr_value in item[3].items():
-                    bp.set_attribute(attr_name, attr_value)
-                    if attr_name == 'range':
-                        self.lidar_range = float(attr_value)
-
-            item.append(bp)
-        self.index = None
-
-    def toggle_camera(self):
-        self.transform_index = (self.transform_index +
-                                1) % len(self._camera_transforms)
-        self.set_sensor(self.index, notify=False, force_respawn=True)
-
-    def set_sensor(self, index, notify=True, force_respawn=False):
-        index = index % len(self.sensors)
-        needs_respawn = True if self.index is None else \
-            (force_respawn or (self.sensors[index]
-             [2] != self.sensors[self.index][2]))
-        if needs_respawn:
-            if self.sensor_rgb_front is not None:
-                self.sensor_rgb_front.destroy()
-                self.surface = None
-
-            # rgb sensor
-            if self.save_mode:
-                ## setup sensors [ tf sensors  ( total 6 * 3 sensors ) ] 
-                # rgb 
-                self.sensor_rgb_front = self._parent.get_world().spawn_actor(
-                    self.sensor_rgb_bp,
-                    self._camera_transforms[8][0],
-                    attach_to=self._parent,
-                    attachment_type=self._camera_transforms[0][1])
-                
-                # ss
-                self.sensor_ss_front = self._parent.get_world().spawn_actor(
-                    self.sensor_ss_bp,
-                    self._camera_transforms[7][0],
-                    attach_to=self._parent,
-                    attachment_type=self._camera_transforms[0][1])
-
-            # We need to pass the lambda a weak reference to self to avoid
-            # circular reference.
-            weak_self = weakref.ref(self)
-
-            if self.save_mode:
-                self.sensor_rgb_front.listen(lambda image: CameraManager._parse_image(weak_self, image, 'rgb_front'))
-                self.sensor_ss_front.listen(lambda image: CameraManager._parse_image(weak_self, image, 'ss_front'))
-
-        if notify:
-            self.hud.notification(self.sensors[index][2])
-        self.index = index
-
-    def next_sensor(self):
-        self.set_sensor(self.index + 1)
-        
-    def render(self, display):
-        if self.surface is not None:
-            
-            # print(self.surface)
-            
-            display.blit(self.surface, (0, 0))
-
-    @staticmethod
-    def _parse_image(weak_self, image, view='top'):
-        self = weak_self()
-        if not self:
-            return
-        if self.sensors[self.index][0].startswith('sensor.lidar'):
-            points = np.frombuffer(image.raw_data, dtype=np.dtype('f4'))
-            points = np.reshape(points, (int(points.shape[0] / 4), 4))
-            lidar_data = np.array(points[:, :2])
-            lidar_data *= min(self.hud.dim) / (2.0 * self.lidar_range)
-            lidar_data += (0.5 * self.hud.dim[0], 0.5 * self.hud.dim[1])
-            lidar_data = np.fabs(lidar_data)  # pylint: disable=E1111
-            lidar_data = lidar_data.astype(np.int32)
-            lidar_data = np.reshape(lidar_data, (-1, 2))
-            lidar_img_size = (self.hud.dim[0], self.hud.dim[1], 3)
-            lidar_img = np.zeros((lidar_img_size), dtype=np.uint8)
-            lidar_img[tuple(lidar_data.T)] = (255, 255, 255)
-            self.surface = pygame.surfarray.make_surface(lidar_img)
-
-        elif view == 'rgb_front':
-            image.convert(self.sensors[self.index][1])
-            array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
-            array = np.reshape(array, (512, 512, 4))
-            array = array[:, :, :3]
-            array = array[:, :, ::-1]
-
-            # render the view shown in monitor
-            self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
-
-        #if self.recording and image.frame % 1 == 0:
-        if True:
-            # if view == 'front':
-            #     self.front_img = image
-
-            ## tf sensors  ( total 6 * 3 sensors )
-            if view == 'rgb_front':
-                self.rgb_front = image
-            elif view == 'rgb_left':
-                self.rgb_left = image
-            elif view == 'rgb_right':
-                self.rgb_right = image
-            elif view == 'rgb_rear':
-                self.rgb_rear = image
-            elif view == 'rgb_rear_left':
-                self.rgb_rear_left = image                
-            elif view == 'rgb_rear_right':
-                self.rgb_rear_right = image
-            elif view == 'depth_front':
-                self.depth_front = image
-            elif view == 'depth_left':
-                self.depth_left = image
-            elif view == 'depth_right':
-                self.depth_right = image
-            elif view == 'depth_rear':
-                self.depth_rear = image
-            elif view == 'depth_rear_left':
-                self.depth_rear_left = image
-            elif view == 'depth_rear_right':
-                self.depth_rear_right = image
-            elif view == 'ss_front':
-                self.ss_front = image
-            elif view == 'ss_left':
-                self.ss_left = image
-            elif view == 'ss_right':
-                self.ss_right = image
-            elif view == 'ss_rear':
-                self.ss_rear = image
-            elif view == 'ss_rear_left':
-                self.ss_rear_left = image
-            elif view == 'ss_rear_right':
-                self.ss_rear_right = image
         
 # ==============================================================================
 # --BEV MAP Manager -------------------------------------------------------------
@@ -1339,11 +1005,9 @@ class BEV_MAP():
         
         self.args = args
         self.world = world
-        
         self.data = None
         self.birdview_producer = BirdViewProducer(
                 args.town, 
-                # PixelDimensions(width=512, height=512), 
                 PixelDimensions(width=304, height=304), 
                 pixels_per_meter=5)
         
@@ -1379,6 +1043,8 @@ class BEV_MAP():
                     traffic_light[_id]["stop_line_A"] = stop_line_dict[key]["stop_line_A"]
                     traffic_light[_id]["stop_line_B"] = stop_line_dict[key]["stop_line_B"]
                     break
+                
+            
         self.traffic_light = traffic_light
         self.obstacle_ids = []
         self.obstacle_flag = False
@@ -1386,7 +1052,25 @@ class BEV_MAP():
         self.destination = None
         self.obstacle_route_list = []
         
+        stop_sign_dict = {}
+
+        for key in stop_line_dict.keys():
+            stop_line_loc = stop_line_dict[key]["loc"]
+            if int(stop_line_loc[0]) == -1 and int(stop_line_loc[1]) == -1:
+                index = int(key)
+                stop_sign_dict[index] = {}
+            
+                stop_sign_dict[index]["stop_line_A"] = stop_line_dict[key]["stop_line_A"]
+                stop_sign_dict[index]["stop_line_B"] = stop_line_dict[key]["stop_line_B"]
+                
+                mid_point = (np.array(stop_line_dict[key]["stop_line_A"]) + np.array(stop_line_dict[key]["stop_line_B"])) / 2.0 
+                stop_sign_dict[index]["mid_point"] = list(mid_point)
+                
+        self.stop_sign_dict = stop_sign_dict
         
+        self.stop_sign_counter = 0
+        self.stop_sign_key = -1
+                
     # For data collection     
     def set_end_point(self, end_point):
         self.end_point = end_point
@@ -1488,13 +1172,11 @@ class BEV_MAP():
         motor_blueprint = ["vehicle.harley-davidson.low_rider","vehicle.kawasaki.ninja","vehicle.yamaha.yzf","vehicle.vespa.zx125"]
         
         def get_xyz(method, rotation=False):
-
             if rotation:
                 roll = method.roll
                 pitch = method.pitch
                 yaw = method.yaw
                 return {"pitch": pitch, "yaw": yaw, "roll": roll}
-
             else:
                 x = method.x
                 y = method.y
@@ -1511,9 +1193,10 @@ class BEV_MAP():
             actor_loc = actor.get_location()
             location = get_xyz(actor_loc)
             rotation = get_xyz(actor.get_transform().rotation, True)
-
+            
             cord_bounding_box = {}
             bbox = actor.bounding_box
+            # print(bbox )
             if actor.type_id in motor_blueprint:
                 bbox.extent.x = 1.177870
                 bbox.extent.y = 0.381839
@@ -1584,7 +1267,6 @@ class BEV_MAP():
         for actor in walkers:
 
             _id = actor.id
-
             actor_loc = actor.get_location()
             location = get_xyz(actor_loc)
             rotation = get_xyz(actor.get_transform().rotation, True)
@@ -1599,8 +1281,6 @@ class BEV_MAP():
                 counter += 1
 
             distance = ego_loc.distance(actor_loc)
-
-            # if distance < 50:
             pedestrian_id_list.append(_id)
 
             acceleration = get_xyz(actor.get_acceleration())
@@ -1635,7 +1315,6 @@ class BEV_MAP():
             data[_id]["extent"] = [dx[2], dx[0], dx[1]]
             data[_id]["matrix"] = vehicle_matrix
             
-            
         traffic_id_list = []
         lights = world.world.get_actors().filter("*traffic_light*")
         for actor in lights:
@@ -1643,7 +1322,6 @@ class BEV_MAP():
             _id = actor.id
             stop_line_A = self.traffic_light[_id]["stop_line_A"]
             stop_line_B = self.traffic_light[_id]["stop_line_B"]
-            
             
             traffic_id_list.append(_id)
             traffic_light_state = int(actor.state)  # traffic light state
@@ -1661,11 +1339,37 @@ class BEV_MAP():
             _id = actor.id
             cord_bounding_box = {}
             actor_loc = actor.get_location()
-            # print(actor_loc)
             distance = ego_loc.distance(actor_loc)
-            bbox = actor.bounding_box
-            verts = [v for v in bbox.get_world_vertices(
-                actor.get_transform())]
+
+            loc = actor.get_transform().location
+            rot = actor.get_transform().rotation
+            
+            actor_name = get_actor_display_name(actor)
+            # print(" == ")
+            # print(actor_name)
+            
+            if "Streetbarrier" in actor_name:
+                # print("streetbarrier")
+                extent = carla.Vector3D(x=0.617676, y=0.148379, z=0.534582)
+                location = carla.Location(x=0.0, y=0.0, z=loc.z+0.534582)
+            elif "Trafficwarning" in actor_name:
+                # print("traffic warning")
+                extent = carla.Vector3D(x=0.919219, y=1.619687, z=1.784762)
+                location = carla.Location(x=0.0, y=0.0, z=loc.z+1.784762)
+            elif "Constructioncone" in actor_name:
+                # print("constructioncone")
+                extent = carla.Vector3D(x=0.242822, y=0.015176, z=0.292885)
+                location = carla.Location(x=0.0, y=0.0, z=loc.z+0.292885)
+            elif "Trafficcone01" in actor_name:
+                # print("trafficcone01")
+                extent = carla.Vector3D(x=0.033018, y=0.623148, z=0.566653)
+                location = carla.Location(x=0.0, y=0.0, z=loc.z+0.566653)
+                
+            bbox = carla.BoundingBox(location, extent)
+            bbox.rotation = carla.Rotation(pitch = rot.pitch, yaw = rot.yaw, roll = rot.roll)
+            
+            verts = [v for v in bbox.get_world_vertices(actor.get_transform())]
+            
             counter = 0
             for loc in verts:
                 cord_bounding_box["cord_"+str(counter)] = [loc.x, loc.y, loc.z]
@@ -1680,19 +1384,16 @@ class BEV_MAP():
             # for plant 
             vehicle_transform = actor.get_transform()
             vehicle_matrix = np.array(vehicle_transform.get_matrix())
-            vehicle_extent = actor.bounding_box.extent
+            vehicle_extent = bbox.extent # actor.bounding_box.extent
             dx = np.array([vehicle_extent.x, vehicle_extent.y, vehicle_extent.z]) * 2.
             vehicle_rotation = vehicle_transform.rotation
             yaw =  vehicle_rotation.yaw/180*np.pi
             vehicle_speed = self._get_forward_speed(transform=vehicle_transform, velocity=actor.get_velocity()) # In m/s
-
-
+            
             data[_id]["yaw"] = yaw
             data[_id]["foward_speed"] = vehicle_speed
             data[_id]["extent"] = [dx[2], dx[0], dx[1]]
             data[_id]["matrix"] = vehicle_matrix
-            
-            
             
         data["traffic_light_ids"] = traffic_id_list
         data["obstacle_ids"] = obstacle_id_list
@@ -1707,8 +1408,6 @@ class BEV_MAP():
 
     def run_step(self, result, ego_id, current_route = None):
         
-        # result["update_route"] = False
-
         actor_dict = copy.deepcopy(self.data)
         
         ego_pos = Loc(x=actor_dict[ego_id]["location"]["x"], y=actor_dict[ego_id]["location"]["y"])
@@ -1722,22 +1421,64 @@ class BEV_MAP():
         r_traffic_light_list = []
         g_traffic_light_list = []
         y_traffic_light_list = []
+        
+        if self.stop_sign_key == -1:
+            # check if close to stop sign 
+            for key in self.stop_sign_dict.keys():
+                stop_sign_loc = self.stop_sign_dict[key]["mid_point"] 
+                stop_sign_loc = Loc(stop_sign_loc[0], stop_sign_loc[1])
+                if check_close(ego_pos, stop_sign_loc, 10):
+                    # check yaw 
+                    yaw = get_yaw(np.array([ego_pos.x, ego_pos.y]), np.array([stop_sign_loc[0], stop_sign_loc[1]]))
+                    
+                    diff_yaw = ego_yaw - yaw 
+                    if -30 < diff_yaw < 30:
+                        self.stop_sign_key = key
+                        self.stop_sign_counter = 40
 
+        if self.stop_sign_counter > 0:
+            # check counter 
+            
+            stop_line_A = self.stop_sign_dict[self.stop_sign_key]["stop_line_A"]
+            stop_line_B = self.stop_sign_dict[self.stop_sign_key]["stop_line_B"]
+            
+
+            pos_0 = [stop_line_A[0], stop_line_A[1]]
+            pos_1 = [stop_line_B[0], stop_line_B[1]]
+            
+            if self.stop_sign_counter > 35:
+                # red light 
+                r_traffic_light_list.append([
+                                        Loc(x=pos_0[0], y=pos_0[1]), 
+                                        Loc(x=pos_1[0], y=pos_1[1]), 
+                                        ])
+            elif self.stop_sign_counter > 30:
+                y_traffic_light_list.append([
+                                        Loc(x=pos_0[0], y=pos_0[1]), 
+                                        Loc(x=pos_1[0], y=pos_1[1]), 
+                                        ]) 
+            else:
+                g_traffic_light_list.append([
+                                        Loc(x=pos_0[0], y=pos_0[1]), 
+                                        Loc(x=pos_1[0], y=pos_1[1]), 
+                                        ])  
+                
+            
+            self.stop_sign_counter -= 1
+            if self.stop_sign_counter == 0:
+                self.stop_sign_key = -1
+        
         vehicle_id_list = list(actor_dict["vehicles_ids"])
-        
         pedestrian_id_list = list(actor_dict["pedestrian_ids"])
-        
         # obstacle_id_list = list(actor_dict["obstacle_ids"])
-        
         traffic_light_id_list = list(actor_dict["traffic_light_ids"])
 
         for id in traffic_light_id_list:
             traffic_light_loc = Loc(x=actor_dict[id]["cord_bounding_box"]["cord_0"][0], y=actor_dict[id]["cord_bounding_box"]["cord_0"][1]) 
-            if not check_close(ego_pos, traffic_light_loc, 45): #35.95m
+            if not check_close(ego_pos, traffic_light_loc, 45): 
                 continue
             pos_0 = actor_dict[id]["cord_bounding_box"]["cord_0"]
             pos_1 = actor_dict[id]["cord_bounding_box"]["cord_1"]
-
 
             if actor_dict[id]["state"] == 0 :
                 r_traffic_light_list.append([
@@ -1755,17 +1496,8 @@ class BEV_MAP():
                                         Loc(x=pos_1[0], y=pos_1[1]), 
                                         ]) 
             
-        for id in self.obstacle_ids:#obstacle_id_list:
+        for id in self.obstacle_ids: # obstacle_id_list:
         
-        # print(self.obstacle_ids)
-        # print(obstacle_id_list)
-        # print("--")
-        
-        # for id in obstacle_id_list:
-            # print(id)
-            
-            # if actor_dict[id]['distance'] > 25:
-            #     continue
             pos_0 = actor_dict[id]["cord_bounding_box"]["cord_0"]
             pos_1 = actor_dict[id]["cord_bounding_box"]["cord_4"]
             pos_2 = actor_dict[id]["cord_bounding_box"]["cord_6"]
@@ -1775,7 +1507,6 @@ class BEV_MAP():
                                         Loc(x=pos_2[0], y=pos_2[1]), 
                                         Loc(x=pos_3[0], y=pos_3[1]), 
                                         ])
-            
         for id in vehicle_id_list:
             
             if id in self.obstacle_ids:
@@ -1790,8 +1521,7 @@ class BEV_MAP():
             pos_1 = actor_dict[id]["cord_bounding_box"]["cord_4"]
             pos_2 = actor_dict[id]["cord_bounding_box"]["cord_6"]
             pos_3 = actor_dict[id]["cord_bounding_box"]["cord_2"]
-            
-
+        
             if int(id) == int(ego_id):
                 agent_bbox_list.append([Loc(x=pos_0[0], y=pos_0[1]), 
                                         Loc(x=pos_1[0], y=pos_1[1]), 
@@ -1849,50 +1579,6 @@ class BEV_MAP():
 
         route_list = current_route[:100]
         
-        # ####### check if obsacle exist 
-        
-        # if not self.obstacle_flag:
-        #     if len(self.obstacle_route_list) != 0:
-                
-        #         # print(len(self.obstacle_route_list))
-        #         # Obstacle Exits 
-                
-        #         init_point = self.obstacle_route_list[0]
-        #         end_point = self.obstacle_route_list[-1]
-        
-        #         desired_index = -1
-        #         #for index in range(len(route_list)):
-        #         for index in range(30):    
-        #             route_point = route_list[index]
-        #             dis =  distance.euclidean([route_point.x, route_point.y], [init_point[0], init_point[1]])
-        #             if dis < 1.0:
-        #                 desired_index = index
-                        
-        #         if desired_index != -1:
-        #             # set obstacle target point 
-        #             self.obstacle_target_point = Loc(x=end_point[0], y=end_point[1])    
-        #             route_list = route_list[:desired_index]
-                    
-        #             # concate with obstacle route 
-        #             for i in range(len(self.obstacle_route_list)):
-        #                 loc = Loc(x=self.obstacle_route_list[i][0], y=self.obstacle_route_list[i][1])
-        #                 route_list.append(loc)
-        #             # print(len(self.obstacle_route_list))
-        #             # print("concate route ")
-                        
-        #             route = self.planner.trace_route(carla.Location(route_list[-1].x, route_list[-1].y), self.destination )
-        #             new_route = []
-        #             for i in range(len(route)):
-        #                 new_route.append(Loc(route[i][0].transform.location.x, route[i][0].transform.location.y))
-        #             route_list += new_route
-                    
-        #             self.obstacle_flag = True
-                    
-        #             result["update_route"] = True
-        #             # uppdte route 
-                    
-                        
-        ####
         birdview: BirdView = self.birdview_producer.produce(ego_pos, ego_yaw,
                                                             agent_bbox_list, 
                                                             self.vehicle_bbox_1_16[ego_id],
@@ -1902,9 +1588,8 @@ class BEV_MAP():
                                                             self.Y_bbox_1_16[ego_id],
                                                             obstacle_bbox_list,
                                                             route_list)
-        
-        
         topdown = BirdViewProducer.as_rgb(birdview)
+        
         # input BEV representation
         roach_obs, new_array =  BirdViewProducer.as_roach_input(birdview)
 
@@ -1944,7 +1629,7 @@ class BEV_MAP():
                     throttle = 0.0
                     brake = np.abs(acc)
 
-                throttle = np.clip(throttle, 0, 0.5)
+                throttle = np.clip(throttle, 0, 0.8)
                 steer = np.clip(steer, -1, 1)
                 brake = np.clip(brake, 0, 1)
                 control_elements = {}
@@ -1985,23 +1670,29 @@ def spawn_obstacle(scenario_obstacles, world, client):
 
         if obstacle_type == "illegal_parking":
             
-            vehicle_blueprints = ["vehicle.tesla.cybertruck", "vehicle.nissan.patrol_2021", "vehicle.mini.cooper_s", "vehicle.ford.mustang", "vehicle.ford.crown", 
-                                "vehicle.dodge.charger_police_2020", "vehicle.dodge.charger_police", "vehicle.citroen.c3", "vehicle.audi.etron"]
+            vehicle_blueprints = [ 
+                                    "vehicle.tesla.model3"
+                                    "vehicle.tesla.cybertruck", 
+                                    "vehicle.nissan.patrol", 
+                                    "vehicle.dodge_charger.police", 
+                                    "vehicle.citroen.c3", 
+                                    "vehicle.volkswagen.t2",
+                                    "vehicle.audi.tt",
+                                    "vehicle.audi.a2",
+                                    "vehicle.audi.etron"
+                                  ]
             bp_lib = world.world.get_blueprint_library()
-            
             blueprint = random.choice(vehicle_blueprints)
             blueprint = bp_lib.find(blueprint) 
-            
             obstacle_transform = carla.Transform(carla.Location(x=pos[0], y=pos[1], z=2.0), carla.Rotation(roll=0.0, pitch=0.0, yaw=yaw))
         else:
             blueprint = world.world.get_blueprint_library().find(f"static.prop.{obstacle_type}")
         
         try:
             obstacle = client.get_world().spawn_actor(blueprint, obstacle_transform)
-        
+            print("spawn ", blueprint)
             id = obstacle.id
             obstacles_id_list.append(id)
-            
         except:
             pass    
             
@@ -2024,18 +1715,10 @@ def spawn_actor_nearby(world, client, spawn_points, agent_dict, route_list, ego_
         point2 = route[1]
         yaw = get_yaw(point1, point2)
         transform = carla.Transform(carla.Location(x=point1[0], y=point1[1], z=2.0), carla.Rotation(roll=0.0, pitch=0.0, yaw=yaw))
-        
-        # blueprint = world.world.get_blueprint_library().find('vehicle*') 
-                                                             #lincoln.mkz_2017')
         blueprint = random.choice(blueprints)
         
         try:
-        
-            # 
-            
             agent = client.get_world().spawn_actor(blueprint, transform)
-            
-            
             id = agent.id
             vehicles_list.append(id)
             agent_dict[id] = {}
@@ -2060,7 +1743,7 @@ def spawn_actor_nearby(world, client, spawn_points, agent_dict, route_list, ego_
             agent_dict[id]["bev_map"] = agent_bev_map
             agent_dict[id]["route"] = agent_route
         except:
-            pass
+            print("spawn vehicle fail")
             
     return vehicles_list, agent_dict
 
@@ -2090,7 +1773,7 @@ def game_loop(args):
     print(len(obstacle_data))
     print("")
     
-    obstacle_scneario_index = 22
+    obstacle_scneario_index = 23
     ego_route_index = 1
     
     # SAVING FLAG
@@ -2105,6 +1788,7 @@ def game_loop(args):
     ego_counter_threshold_max = 50
     obstacle_route_list = scenario_info[2] 
     obstacle_info = scenario_info[1] # All obstacle type and transforms  
+    
     # get ego transform 
     # get other vehicle transform 
     # Ego vehicle take the first route 
@@ -2113,17 +1797,11 @@ def game_loop(args):
     yaw = get_yaw(point1, point2)
     
     ego_transform = carla.Transform(carla.Location(x=point1[0], y=point1[1], z=3.0), carla.Rotation(roll=0.0, pitch=0.0, yaw=yaw))
-    # ego_transform = carla.Transform(carla.Location(x=point1[0], y=point1[1], z=5.0), carla.Rotation(roll=0.0, pitch=0.0, yaw=yaw))
-
     
     ############################################################
     
     client = carla.Client(args.host, args.port)
     client.set_timeout(10.0)
-
-    # display = pygame.display.set_mode(
-    #     (args.width, args.height),
-    #     pygame.HWSURFACE | pygame.DOUBLEBUF)
     
     display = pygame.display.set_mode(
         (512, 900),
@@ -2133,10 +1811,10 @@ def game_loop(args):
 
     hud = HUD(args.width, args.height, args.distance)
     world = World(client.load_world(args.town), hud, args, ego_transform)
-
+    
     settings = world.world.get_settings()
     settings.fixed_delta_seconds = 0.05
-    settings.synchronous_mode = True  # Enables synchronous mode
+    settings.synchronous_mode = True 
     world.world.apply_settings(settings)
     controller = KeyboardControl(world, args.autopilot)
     
@@ -2178,7 +1856,6 @@ def game_loop(args):
     
     vehicles_list, agent_dict = spawn_actor_nearby(world, client, spawn_points, agent_dict, obstacle_route_list, ego_route_index, planner, args, processed_policy)
         
-        
     ####################################################################################################
     # spawn obstacles 
     
@@ -2197,9 +1874,10 @@ def game_loop(args):
     
     start_frame = world.world.tick()
     
-    
     # For data collection     
-    # if os.path.exists("./dataset/"):
+    if not os.path.exists("./dataset"):
+        os.mkdir("./dataset")
+        
     current_dataset = os.listdir("./dataset")  
     # filter by Town
     current_dataset = list(filter(lambda x: (args.town in x), current_dataset))  
@@ -2211,7 +1889,6 @@ def game_loop(args):
             os.makedirs(saving_path)
 
     world.world.tick()
-    
     
     counter_for_ego = 0
     while True:
@@ -2241,9 +1918,7 @@ def game_loop(args):
 
         ###################Ego vehicle control#####################
         player_bev_map.run_step(result, world.player.id, ego_route)
-        bev_map_rgb = result["bev_map_rgb"] # to vis
-        # if result["update_route"]:
-        #     ego_route = result["current_route"]
+        bev_map_rgb = result["bev_map_rgb"]
 
         control_elements_list = result["control_elements_list"]
         # for render
@@ -2275,9 +1950,6 @@ def game_loop(args):
             agent_dict[id]["bev_map"].set_data(processed_data)
             agent_dict[id]["bev_map"].run_step(agent_dict[id]["result"], id, agent_dict[id]["route"]) 
             
-            # if agent_dict[id]["result"]["update_route"]:
-            #     agent_dict[id]["route"] = agent_dict[id]["result"]["current_route"]
-            
             control_elements_list = agent_dict[id]["result"]["control_elements_list"]
             control_elements = control_elements_list[0]
             control = carla.VehicleControl(throttle=control_elements['throttle'], steer=control_elements['steer'], brake=control_elements['brake'])
@@ -2293,7 +1965,6 @@ def game_loop(args):
             surface = pygame.transform.rotate(surface, 90)
             display.blit(surface, (256, 210*(i+1)))  
         
-            
         # DATA saving        
         if saving_flag :
             route_list = []
@@ -2306,13 +1977,18 @@ def game_loop(args):
             current_frame = frame - start_frame
             np.savez_compressed( f"{saving_path}/" + "%04d" % current_frame, np.array(processed_data), allow_pickle=True) # store with npz in compressed format will save much of space on disk
         
-        
         world.hud.render(display)
         pygame.display.flip()
         
         if check_close(ego_current_location, player_bev_map.end_point , distance=2):
             break
-
+        
+        # check collision 
+        if world.collision_sensor.collision_flag:            
+            with open("remove.txt", "a") as myfile:
+                myfile.write(f"rm -r {saving_path}")
+            break
+            
     # destroy obstacles 
     client.apply_batch([carla.command.DestroyActor(x) for x in obstacles_ids])
     client.apply_batch([carla.command.DestroyActor(x) for x in vehicles_list])
